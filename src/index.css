@@ -7,22 +7,25 @@
 }
 
 :root {
-  /* Updated color palette - lighter but still dark */
-  --bg:        #121826;        /* Lighter than #0a0e1a - charcoal with blue undertone */
-  --surface:   #1a202f;        /* Lighter card background */
-  --surface2:  #1f2537;        /* Lighter secondary surface */
-  --surface3:  #1b212f;        /* Lighter tertiary surface */
-  --border:    #2d3548;        /* Lighter border color */
-  --border2:   #3a4258;        /* Lighter secondary border */
-  --text-1:    #f0f4ff;        /* Kept same - bright white */
-  --text-2:    #9eb0cc;        /* Lighter gray-blue */
-  --text-3:    #6c7a96;        /* Lighter muted color */
+  /* Flame-inspired color palette - warm amber/orange tones */
+  --bg:        #1a140f;        /* Warm dark brown/amber base like charcoal embers */
+  --surface:   #241c14;        /* Rich warm dark brown - like aged wood */
+  --surface2:  #2d2219;        /* Warmer surface - like dark amber */
+  --surface3:  #211911;        /* Deep warm background */
+  --border:    #4a3522;        /* Amber-brown border */
+  --border2:   #614529;        /* Lighter amber border */
+  --text-1:    #fff5e8;        /* Warm off-white like candlelight */
+  --text-2:    #e6d5b8;        /* Warm cream - like flame glow */
+  --text-3:    #b89a6e;        /* Warm amber - like embers */
+  --accent-primary: #ff8c42;   /* Bright orange flame */
+  --accent-secondary: #ff6b35; /* Deep orange like fire core */
+  --accent-glow: #ff8c42cc;    /* Orange glow effect */
   --font-body: 'DM Sans', sans-serif;
   --font-mono: 'DM Mono', monospace;
   --font-disp: 'Outfit', sans-serif;
   --r:         16px;
   --r-sm:      10px;
-  --shadow:    0 1px 3px rgba(0,0,0,0.3), 0 4px 20px rgba(0,0,0,0.25);
+  --shadow:    0 1px 3px rgba(0,0,0,0.4), 0 4px 20px rgba(0,0,0,0.3);
 }
 
 html { 
@@ -75,10 +78,11 @@ body {
   }
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling - warm accent */
 ::-webkit-scrollbar        { width: 4px; height: 4px; }
-::-webkit-scrollbar-track  { background: transparent; }
-::-webkit-scrollbar-thumb  { background: var(--border2); border-radius: 10px; }
+::-webkit-scrollbar-track  { background: var(--surface2); }
+::-webkit-scrollbar-thumb  { background: var(--accent-primary); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-secondary); }
 
 button {
   font-family: inherit;
@@ -89,18 +93,24 @@ button {
   touch-action: manipulation;
 }
 
-/* Animations - slightly adjusted glow colors for better contrast */
+/* Animations - warm glow effects */
 @keyframes pulseGreen {
-  0%,100% { box-shadow: 0 0 6px rgba(0,229,160,0.45); }
-  50%      { box-shadow: 0 0 20px rgba(0,229,160,0.8); }
+  0%,100% { box-shadow: 0 0 6px rgba(255,140,66,0.45); }
+  50%      { box-shadow: 0 0 20px rgba(255,140,66,0.8); }
 }
 @keyframes pulseRed {
-  0%,100% { box-shadow: 0 0 6px rgba(255,69,96,0.45); }
-  50%      { box-shadow: 0 0 22px rgba(255,69,96,0.9); }
+  0%,100% { box-shadow: 0 0 6px rgba(255,107,53,0.45); }
+  50%      { box-shadow: 0 0 22px rgba(255,107,53,0.9); }
+}
+@keyframes flicker {
+  0%,100% { opacity: 1; text-shadow: 0 0 8px rgba(255,140,66,0.5); }
+  25%     { opacity: 0.95; text-shadow: 0 0 12px rgba(255,140,66,0.7); }
+  50%     { opacity: 1; text-shadow: 0 0 6px rgba(255,140,66,0.4); }
+  75%     { opacity: 0.96; text-shadow: 0 0 10px rgba(255,140,66,0.6); }
 }
 @keyframes shimmer {
-  0%,100% { opacity: 1; }
-  50%      { opacity: 0.65; }
+  0%,100% { opacity: 1; background: rgba(255,140,66,0.1); }
+  50%      { opacity: 0.65; background: rgba(255,140,66,0.2); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes fadeUp {
