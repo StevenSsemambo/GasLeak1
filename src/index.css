@@ -24,17 +24,57 @@
   --shadow:    0 1px 3px rgba(0,0,0,0.5), 0 4px 20px rgba(0,0,0,0.4);
 }
 
-html { -webkit-text-size-adjust: 100%; }
+html { 
+  -webkit-text-size-adjust: 100%;
+  overflow-x: hidden;
+  width: 100%;
+  max-width: 100%;
+}
 
-html, body, #root { height: 100%; }
+html, body, #root { 
+  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
 
 body {
   background: var(--bg);
   color: var(--text-1);
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  width: 100%;
+  max-width: 100%;
 }
 
+/* Hide mobile nav by default, show on mobile */
+#mobile-nav {
+  display: none !important;
+}
+
+/* Desktop nav visible by default */
+#desktop-nav {
+  display: flex !important;
+}
+
+/* Mobile styles */
+@media (max-width: 640px) {
+  #desktop-nav {
+    display: none !important;
+  }
+  
+  #mobile-nav {
+    display: block !important;
+  }
+  
+  /* Add bottom padding to main content to account for fixed nav */
+  #main-content {
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 8px)) !important;
+  }
+}
+
+/* Scrollbar styling */
 ::-webkit-scrollbar        { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track  { background: transparent; }
 ::-webkit-scrollbar-thumb  { background: var(--border2); border-radius: 10px; }
@@ -48,6 +88,7 @@ button {
   touch-action: manipulation;
 }
 
+/* Animations */
 @keyframes pulseGreen {
   0%,100% { box-shadow: 0 0 6px rgba(0,229,160,0.35); }
   50%      { box-shadow: 0 0 18px rgba(0,229,160,0.7); }
