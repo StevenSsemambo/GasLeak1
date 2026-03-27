@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Mono:wght@400;500&family=Outfit:wght@600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:wght@400;500&family=Outfit:wght@600;700;800&display=swap');
 
 *, *::before, *::after {
   box-sizing: border-box;
@@ -7,58 +7,68 @@
 }
 
 :root {
-  --bg:           #0f172a;
-  --surface:      #1e293b;
-  --surface2:     #162032;
-  --surface3:     #0f1a2e;
-  --border:       #334155;
-  --border2:      #475569;
-  --text-1:       #f1f5f9;
-  --text-2:       #94a3b8;
-  --text-3:       #64748b;
-  --accent-blue:  #3b82f6;
-  --accent-teal:  #10b981;
-  --accent-warn:  #f59e0b;
-  --accent-red:   #ef4444;
-  --font-body:    'DM Sans', sans-serif;
-  --font-mono:    'DM Mono', monospace;
-  --font-disp:    'Outfit', sans-serif;
-  --r:            14px;
-  --r-sm:         8px;
-  --shadow:       0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3);
+  --bg:        #0a0e1a;
+  --surface:   #111827;
+  --surface2:  #0d1424;
+  --surface3:  #0a1020;
+  --border:    #1e2d45;
+  --border2:   #2a3d57;
+  --text-1:    #f0f4ff;
+  --text-2:    #8ba3bf;
+  --text-3:    #4a6280;
+  --font-body: 'DM Sans', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+  --font-disp: 'Outfit', sans-serif;
+  --r:         16px;
+  --r-sm:      10px;
+  --shadow:    0 1px 3px rgba(0,0,0,0.5), 0 4px 20px rgba(0,0,0,0.4);
 }
 
-html, body, #root {
-  height: 100%;
+html { -webkit-text-size-adjust: 100%; }
+
+html, body, #root { height: 100%; }
+
+body {
   background: var(--bg);
   color: var(--text-1);
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
 }
 
-::-webkit-scrollbar        { width: 4px; }
+::-webkit-scrollbar        { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track  { background: transparent; }
 ::-webkit-scrollbar-thumb  { background: var(--border2); border-radius: 10px; }
 
-button { font-family: inherit; cursor: pointer; border: none; background: none; }
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
 
 @keyframes pulseGreen {
-  0%,100% { box-shadow: 0 0 8px rgba(0,229,160,0.4); }
-  50%      { box-shadow: 0 0 20px rgba(0,229,160,0.8); }
+  0%,100% { box-shadow: 0 0 6px rgba(0,229,160,0.35); }
+  50%      { box-shadow: 0 0 18px rgba(0,229,160,0.7); }
 }
 @keyframes pulseRed {
-  0%,100% { box-shadow: 0 0 8px rgba(255,69,96,0.4); }
-  50%      { box-shadow: 0 0 24px rgba(255,69,96,0.9); }
+  0%,100% { box-shadow: 0 0 6px rgba(255,69,96,0.35); }
+  50%      { box-shadow: 0 0 20px rgba(255,69,96,0.85); }
 }
 @keyframes shimmer {
   0%,100% { opacity: 1; }
-  50%      { opacity: 0.7; }
+  50%      { opacity: 0.65; }
 }
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 @keyframes fadeUp {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(12px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.fade-up { animation: fadeUp 0.35s ease; }
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fade-up    { animation: fadeUp 0.3s ease both; }
+.slide-down { animation: slideDown 0.25s ease both; }
