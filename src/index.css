@@ -7,21 +7,22 @@
 }
 
 :root {
-  --bg:        #0a0e1a;
-  --surface:   #111827;
-  --surface2:  #0d1424;
-  --surface3:  #0a1020;
-  --border:    #1e2d45;
-  --border2:   #2a3d57;
-  --text-1:    #f0f4ff;
-  --text-2:    #8ba3bf;
-  --text-3:    #4a6280;
+  /* Updated color palette - lighter but still dark */
+  --bg:        #121826;        /* Lighter than #0a0e1a - charcoal with blue undertone */
+  --surface:   #1a202f;        /* Lighter card background */
+  --surface2:  #1f2537;        /* Lighter secondary surface */
+  --surface3:  #1b212f;        /* Lighter tertiary surface */
+  --border:    #2d3548;        /* Lighter border color */
+  --border2:   #3a4258;        /* Lighter secondary border */
+  --text-1:    #f0f4ff;        /* Kept same - bright white */
+  --text-2:    #9eb0cc;        /* Lighter gray-blue */
+  --text-3:    #6c7a96;        /* Lighter muted color */
   --font-body: 'DM Sans', sans-serif;
   --font-mono: 'DM Mono', monospace;
   --font-disp: 'Outfit', sans-serif;
   --r:         16px;
   --r-sm:      10px;
-  --shadow:    0 1px 3px rgba(0,0,0,0.5), 0 4px 20px rgba(0,0,0,0.4);
+  --shadow:    0 1px 3px rgba(0,0,0,0.3), 0 4px 20px rgba(0,0,0,0.25);
 }
 
 html { 
@@ -88,14 +89,14 @@ button {
   touch-action: manipulation;
 }
 
-/* Animations */
+/* Animations - slightly adjusted glow colors for better contrast */
 @keyframes pulseGreen {
-  0%,100% { box-shadow: 0 0 6px rgba(0,229,160,0.35); }
-  50%      { box-shadow: 0 0 18px rgba(0,229,160,0.7); }
+  0%,100% { box-shadow: 0 0 6px rgba(0,229,160,0.45); }
+  50%      { box-shadow: 0 0 20px rgba(0,229,160,0.8); }
 }
 @keyframes pulseRed {
-  0%,100% { box-shadow: 0 0 6px rgba(255,69,96,0.35); }
-  50%      { box-shadow: 0 0 20px rgba(255,69,96,0.85); }
+  0%,100% { box-shadow: 0 0 6px rgba(255,69,96,0.45); }
+  50%      { box-shadow: 0 0 22px rgba(255,69,96,0.9); }
 }
 @keyframes shimmer {
   0%,100% { opacity: 1; }
