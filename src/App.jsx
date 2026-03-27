@@ -107,6 +107,7 @@ function Card({ children, style, accent, glow }) {
       borderRadius: 'var(--r)', padding: '18px 16px',
       boxShadow: glow || 'var(--shadow)',
       transition: 'box-shadow 0.3s, border-color 0.3s',
+      minWidth: 0,
       ...style
     }}>{children}</div>
   )
@@ -204,9 +205,9 @@ function BarChart({ data, color }) {
   )
   const max = Math.max(...data.map(d => d.value), 1)
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 80 }}>
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 80, width: '100%' }}>
       {data.map((d, i) => (
-        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}>
+        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end', minWidth: 0 }}>
           <div style={{ width: '100%', borderRadius: '3px 3px 0 0', height: `${(d.value / max) * 64}px`, minHeight: d.value > 0 ? 3 : 0, background: color, opacity: d.value > 0 ? 1 : 0.15, transition: 'height 0.6s cubic-bezier(.4,0,.2,1)' }} />
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)' }}>{d.label}</span>
         </div>
@@ -222,9 +223,9 @@ function DualBarChart({ data }) {
   )
   const max = Math.max(...data.map(d => Math.max(d.high, d.low)), 1)
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 80 }}>
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 80, width: '100%' }}>
       {data.map((d, i) => (
-        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}>
+        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end', minWidth: 0 }}>
           <div style={{ width: '100%', display: 'flex', gap: 2, alignItems: 'flex-end', justifyContent: 'center' }}>
             <div style={{ flex: 1, borderRadius: '2px 2px 0 0', height: `${(d.high / max) * 60}px`, minHeight: d.high > 0 ? 3 : 0, background: '#ff4560', opacity: d.high > 0 ? 1 : 0.12 }} />
             <div style={{ flex: 1, borderRadius: '2px 2px 0 0', height: `${(d.low / max) * 60}px`, minHeight: d.low > 0 ? 3 : 0, background: '#ffb020', opacity: d.low > 0 ? 1 : 0.12 }} />
@@ -505,7 +506,15 @@ export default function App() {
   const bannerH = bannerCount * 56  // each banner ~56px
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ 
+      minHeight: '100vh', 
+      background: 'var(--bg)', 
+      display: 'flex', 
+      flexDirection: 'column',
+      width: '100%',
+      maxWidth: '100%',
+      overflowX: 'hidden'
+    }}>
 
       {/* ── HEADER ─────────────────────────────────────────────────────── */}
       <header style={{
@@ -612,37 +621,61 @@ export default function App() {
       </nav>
 
       {/* ── MAIN CONTENT ────────────────────────────────────────────────── */}
-      <main className="fade-up" style={{ flex: 1, padding: '16px', maxWidth: 960, width: '100%', margin: '0 auto' }}>
+      <main id="main-content" className="fade-up" style={{ 
+        flex: 1, 
+        padding: '16px', 
+        maxWidth: 960, 
+        width: '100%', 
+        margin: '0 auto',
+        minWidth: 0,
+        overflowX: 'hidden'
+      }}>
 
         {/* ════ DASHBOARD ════ */}
-        {tab === 'dashboard' && <DashboardTab
-          gasLevel={gasLevel} lCol={lCol} rawWeightG={rawWeightG} cylinderPreset={cylinderPreset}
-          levelHistory={levelHistory} severity={severity} displaySev={displaySev}
-          displayPpm={displayPpm} currentPpm={currentPpm} sCol={sCol} ppmHistory={ppmHistory}
-          cookingMode={cookingMode} estDays={estDays} totalLeaks={totalLeaks}
-          rules={rules}
-        />}
+        {tab === 'dashboard' && (
+          <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
+            <DashboardTab
+              gasLevel={gasLevel} lCol={lCol} rawWeightG={rawWeightG} cylinderPreset={cylinderPreset}
+              levelHistory={levelHistory} severity={severity} displaySev={displaySev}
+              displayPpm={displayPpm} currentPpm={currentPpm} sCol={sCol} ppmHistory={ppmHistory}
+              cookingMode={cookingMode} estDays={estDays} totalLeaks={totalLeaks}
+              rules={rules}
+            />
+          </div>
+        )}
 
         {/* ════ ALERTS ════ */}
-        {tab === 'alerts' && <AlertsTab nonSafeAlerts={nonSafeAlerts} setAlerts={setAlerts} />}
+        {tab === 'alerts' && (
+          <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
+            <AlertsTab nonSafeAlerts={nonSafeAlerts} setAlerts={setAlerts} />
+          </div>
+        )}
 
         {/* ════ ANALYTICS ════ */}
-        {tab === 'analytics' && <AnalyticsTab
-          estDays={estDays} avgPpm7d={avgPpm7d} maxPpm7d={maxPpm7d}
-          highLeaks7d={highLeaks7d} lowLeaks7d={lowLeaks7d}
-          weeklyUsage={weeklyUsage} weeklyLeaksBySev={weeklyLeaksBySev} weeklyPpm={weeklyPpm}
-          gasLevel={gasLevel} cylinderPreset={cylinderPreset} levelHistory={levelHistory}
-          rawWeightG={rawWeightG}
-        />}
+        {tab === 'analytics' && (
+          <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
+            <AnalyticsTab
+              estDays={estDays} avgPpm7d={avgPpm7d} maxPpm7d={maxPpm7d}
+              highLeaks7d={highLeaks7d} lowLeaks7d={lowLeaks7d}
+              weeklyUsage={weeklyUsage} weeklyLeaksBySev={weeklyLeaksBySev} weeklyPpm={weeklyPpm}
+              gasLevel={gasLevel} cylinderPreset={cylinderPreset} levelHistory={levelHistory}
+              rawWeightG={rawWeightG}
+            />
+          </div>
+        )}
 
         {/* ════ DEVICE ════ */}
-        {tab === 'device' && <DeviceTab
-          cylinderId={cylinderId} setCylinderId={setCylinderId}
-          connected={connected} demoMode={demoMode} lastSeen={lastSeen}
-          displaySev={displaySev} displayPpm={displayPpm} currentRaw={currentRaw}
-          cookingMode={cookingMode} avgPpm7d={avgPpm7d} maxPpm7d={maxPpm7d}
-          sCol={sCol}
-        />}
+        {tab === 'device' && (
+          <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
+            <DeviceTab
+              cylinderId={cylinderId} setCylinderId={setCylinderId}
+              connected={connected} demoMode={demoMode} lastSeen={lastSeen}
+              displaySev={displaySev} displayPpm={displayPpm} currentRaw={currentRaw}
+              cookingMode={cookingMode} avgPpm7d={avgPpm7d} maxPpm7d={maxPpm7d}
+              sCol={sCol}
+            />
+          </div>
+        )}
       </main>
 
       {/* ── MOBILE BOTTOM NAV ───────────────────────────────────────────── */}
@@ -650,7 +683,6 @@ export default function App() {
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
         background: 'rgba(10,14,26,0.97)', backdropFilter: 'blur(16px)',
         borderTop: '1px solid var(--border)',
-        display: 'none',  /* toggled by CSS @media */
         paddingBottom: 'env(safe-area-inset-bottom, 0px)',
       }}>
         <div style={{ display: 'flex', height: 60 }}>
@@ -678,14 +710,6 @@ export default function App() {
           ))}
         </div>
       </nav>
-
-      {/* Inline responsive rule to show/hide navs */}
-      <style>{`
-        @media (max-width: 640px) {
-          #desktop-nav { display: none !important; }
-          #mobile-nav  { display: block !important; }
-        }
-      `}</style>
     </div>
   )
 }
@@ -695,13 +719,13 @@ export default function App() {
 // ══════════════════════════════════════════════════════════════════════════
 function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory, severity, displaySev, displayPpm, currentPpm, sCol, ppmHistory, cookingMode, estDays, totalLeaks, rules }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
 
       {/* ── Row 1: Two hero cards side-by-side ─────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, width: '100%' }}>
 
         {/* Gas Level card */}
-        <Card accent={lCol.main} glow={lCol.glow} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px 12px' }}>
+        <Card accent={lCol.main} glow={lCol.glow} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px 12px', minWidth: 0 }}>
           <SectionTitle style={{ marginBottom: 10 }}>Cylinder Level</SectionTitle>
           <ArcGauge value={gasLevel} color={lCol.main} size={130} />
           <div style={{ marginTop: 10, textAlign: 'center' }}>
@@ -718,7 +742,7 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
         </Card>
 
         {/* Leakage Status card */}
-        <Card accent={sCol.main} glow={displaySev !== 'safe' ? sCol.glow : undefined} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '20px 12px' }}>
+        <Card accent={sCol.main} glow={displaySev !== 'safe' ? sCol.glow : undefined} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '20px 12px', minWidth: 0 }}>
           <SectionTitle style={{ marginBottom: 6 }}>Leak Status</SectionTitle>
           <div style={{
             width: 72, height: 72, borderRadius: '50%',
@@ -749,13 +773,13 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
       </Card>
 
       {/* ── Row 3: Key stats strip ────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, width: '100%' }}>
         {[
           { label: 'Days Left',    val: `~${estDays}d`,       col: '#4d8eff' },
           { label: 'Gas Level',    val: `${Math.round(gasLevel)}%`, col: lCol.main },
           { label: 'Leak Events',  val: totalLeaks,           col: '#ff4560' },
         ].map((s, i) => (
-          <Card key={i} style={{ textAlign: 'center', padding: '14px 8px' }}>
+          <Card key={i} style={{ textAlign: 'center', padding: '14px 8px', minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-disp)', fontSize: 24, fontWeight: 800, color: s.col, lineHeight: 1 }}>{s.val}</div>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)', marginTop: 6, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{s.label}</div>
           </Card>
@@ -798,8 +822,8 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
 // ══════════════════════════════════════════════════════════════════════════
 function AlertsTab({ nonSafeAlerts, setAlerts }) {
   return (
-    <Card>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18, gap: 12 }}>
+    <Card style={{ minWidth: 0 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <SectionTitle style={{ marginBottom: 4 }}>Alert History · MQ6</SectionTitle>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>
@@ -819,14 +843,14 @@ function AlertsTab({ nonSafeAlerts, setAlerts }) {
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
         {nonSafeAlerts.map(a => {
           const ac = C[a.severity]
           return (
-            <div key={a.id} style={{ padding: '12px 14px', borderRadius: 'var(--r-sm)', background: ac.dim, border: `1px solid ${ac.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <div key={a.id} style={{ padding: '12px 14px', borderRadius: 'var(--r-sm)', background: ac.dim, border: `1px solid ${ac.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
                 <span style={{ fontSize: 18, flexShrink: 0 }}>{a.severity === 'high' ? '🚨' : '⚠️'}</span>
-                <div style={{ minWidth: 0 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600, color: ac.main }}>{a.msg}</div>
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <span>{a.date} · {a.time}</span>
@@ -857,12 +881,12 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
     { label: 'Low Leaks 7d',  val: lowLeaks7d,                                         col: '#ffb020' },
   ]
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
 
       {/* Stats grid — 2 cols on mobile, 3 cols on wider */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, width: '100%' }}>
         {statRows.map((s, i) => (
-          <Card key={i} style={{ textAlign: 'center', padding: '16px 10px' }}>
+          <Card key={i} style={{ textAlign: 'center', padding: '16px 10px', minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-disp)', fontSize: 26, fontWeight: 800, color: s.col, lineHeight: 1 }}>{s.val}</div>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)', marginTop: 8, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{s.label}</div>
           </Card>
@@ -889,7 +913,7 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
       <Card>
         <SectionTitle>Weekly Average PPM (≥{LPG_PPM_THRESHOLD} ppm only)</SectionTitle>
         <BarChart data={weeklyPpm} color="#ffb020" />
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', flexWrap: 'wrap', gap: 8 }}>
           <span>7d avg: {avgPpm7d != null ? `${avgPpm7d} ppm` : '0 ppm'}</span>
           <span style={{ color: maxPpm7d > 500 ? '#ff4560' : maxPpm7d > 300 ? '#ffb020' : 'var(--text-3)' }}>
             peak: {maxPpm7d != null ? `${maxPpm7d} ppm` : '0 ppm'}
@@ -901,7 +925,7 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
         <Card>
           <SectionTitle>Gas Level Trend · Last {Math.min(levelHistory.length, 60)} Readings</SectionTitle>
           <div style={{ height: 80 }}><Sparkline data={levelHistory} color={lCol.main} height={80} /></div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', flexWrap: 'wrap', gap: 8 }}>
             <span>oldest</span>
             <span>now: {Math.round(gasLevel)}%{rawWeightG != null ? ` (${(rawWeightG / 1000).toFixed(2)} kg)` : ''}</span>
           </div>
@@ -916,13 +940,13 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
 // ══════════════════════════════════════════════════════════════════════════
 function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, displaySev, displayPpm, currentRaw, cookingMode, avgPpm7d, maxPpm7d, sCol }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
 
-      <Card style={{ marginBottom: 0 }}>
+      <Card style={{ marginBottom: 0, minWidth: 0 }}>
         <CylinderSelector selectedId={cylinderId} onChange={setCylinderId} />
       </Card>
 
-      <Card accent="#4d8eff">
+      <Card accent="#4d8eff" style={{ minWidth: 0 }}>
         <SectionTitle>ESP32 Status</SectionTitle>
         {[
           { k: 'Connection', v: connected ? 'Online' : demoMode ? 'Demo Mode' : 'Offline', col: connected ? '#00e5a0' : demoMode ? '#ffb020' : '#ff4560' },
@@ -931,14 +955,14 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
           { k: 'Send Rate',  v: 'Every 5 seconds', col: null },
           { k: 'Firmware',   v: 'GasWatch v2.2.0', col: '#4d8eff' },
         ].map((r, i, arr) => (
-          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none', gap: 12 }}>
+          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none', gap: 12, flexWrap: 'wrap' }}>
             <span style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-3)', flexShrink: 0 }}>{r.k}</span>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: r.col || 'var(--text-2)', textAlign: 'right' }}>{r.v}</span>
           </div>
         ))}
       </Card>
 
-      <Card>
+      <Card style={{ minWidth: 0 }}>
         <SectionTitle>Live MQ6 Readings</SectionTitle>
         {[
           { k: 'Severity',   v: cookingMode ? 'PAUSED' : displaySev.toUpperCase(),                        col: cookingMode ? '#ffb020' : sCol.main },
@@ -947,21 +971,21 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
           { k: '7d Avg PPM', v: avgPpm7d != null ? `${avgPpm7d} ppm` : '0 ppm',                          col: 'var(--text-2)' },
           { k: '7d Peak',    v: maxPpm7d != null ? `${maxPpm7d} ppm` : '0 ppm',                          col: maxPpm7d > 500 ? '#ff4560' : maxPpm7d > 300 ? '#ffb020' : 'var(--text-2)' },
         ].map((r, i, arr) => (
-          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none', gap: 12 }}>
+          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none', gap: 12, flexWrap: 'wrap' }}>
             <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-3)', flexShrink: 0 }}>{r.k}</span>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: r.col }}>{r.v}</span>
           </div>
         ))}
       </Card>
 
-      <Card>
+      <Card style={{ minWidth: 0 }}>
         <SectionTitle>Sensor Health</SectionTitle>
         {[
           { name: 'HX711 Load Cell', type: 'weight_grams via SPI', health: connected ? 100 : 0, col: '#4d8eff' },
           { name: 'MQ6 Gas Sensor',  type: 'severity + ppm_approx', health: connected ? 98 : 0,  col: '#00e5a0' },
         ].map((s, i) => (
           <div key={i} style={{ padding: '12px', background: 'var(--surface2)', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', marginBottom: i === 0 ? 8 : 0 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 10, flexWrap: 'wrap' }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>{s.name}</div>
                 <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{s.type}</div>
@@ -976,7 +1000,7 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
         ))}
       </Card>
 
-      <Card>
+      <Card style={{ minWidth: 0 }}>
         <SectionTitle>Integration Notes</SectionTitle>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {[
