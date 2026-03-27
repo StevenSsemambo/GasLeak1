@@ -2,8 +2,37 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from './supabase.js'
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RULE-BASED RECOMMENDATIONS ENGINE
-// Inputs: severity (from MQ6 gas_leakages), level (DYP-L06 %), ppm (MQ6)
+// CYLINDER PRESETS  (East Africa standard LPG cylinders)
+// tare_g  = empty cylinder weight in grams
+// net_g   = usable gas weight in grams
+// ═══════════════════════════════════════════════════════════════════════════
+export const CYLINDER_PRESETS = [
+  { id: '3kg',  label: '3 kg',  net_g:  3000, tare_g:  5000 },
+  { id: '6kg',  label: '6 kg',  net_g:  6000, tare_g:  8000 },
+  { id: '12kg', label: '12 kg', net_g: 12000, tare_g: 14000 },
+  { id: '15kg', label: '15 kg', net_g: 15000, tare_g: 17000 },
+]
+const DEFAULT_CYLINDER = '6kg'
+
+const weightToPercent = (weight_g, preset) => {
+  if (weight_g == null || !preset) return 0
+  const pct = ((weight_g - preset.tare_g) / preset.net_g) * 100
+  return Math.min(100, Math.max(0, pct))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MQ6 THRESHOLD FILTER
+// ═══════════════════════════════════════════════════════════════════════════
+const LPG_PPM_THRESHOLD = 300
+
+const filterPpm = (ppm) => (ppm != null && ppm >= LPG_PPM_THRESHOLD ? ppm : null)
+const filterSeverity = (sev, ppm) => {
+  if (ppm != null && ppm >= LPG_PPM_THRESHOLD) return sev
+  return 'safe'
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RECOMMENDATIONS ENGINE
 // ═══════════════════════════════════════════════════════════════════════════
 const getRecommendations = (severity, level, ppm) => {
   if (severity === 'high') return [
@@ -54,8 +83,8 @@ const isConfigured = () => !!(import.meta.env.VITE_SUPABASE_URL && import.meta.e
 
 let demoIdx = 0
 const demoSevs = ['safe','safe','safe','safe','low','safe','safe','high','safe','safe','safe','safe']
-const demoPpm  = [45, 52, 48, 61, 220, 55, 44, 650, 51, 48, 53, 50]
-const genDemoLevel = prev => Math.max(5, Math.min(100, (prev ?? 72) + (Math.random() - 0.48) * 1.5))
+const demoPpm  = [45, 52, 48, 61, 350, 55, 44, 750, 51, 48, 53, 50]
+const genDemoWeight = prev => Math.max(8050, Math.min(14000, (prev ?? 11400) + (Math.random() - 0.52) * 30))
 
 const fmtTime = d => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 const fmtDate = d => new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric' })
@@ -77,19 +106,22 @@ function SectionTitle({ children }) {
 
 function PpmBar({ ppm }) {
   const MAX = 1000
-  const pct = Math.min(100, ((ppm || 0) / MAX) * 100)
-  const col  = ppm >= 500 ? '#ff4560' : ppm >= 200 ? '#ffb020' : '#00e5a0'
+  const displayPpm = filterPpm(ppm)
+  const pct = Math.min(100, ((displayPpm || 0) / MAX) * 100)
+  const col = displayPpm >= 500 ? '#ff4560' : displayPpm >= 300 ? '#ffb020' : '#00e5a0'
   return (
     <div>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6, fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-3)' }}>
         <span>MQ6 Gas Concentration</span>
-        <span style={{ color:col, fontWeight:600 }}>{ppm != null ? `~${Math.round(ppm)} ppm` : '— ppm'}</span>
+        <span style={{ color: displayPpm ? col : 'var(--text-3)', fontWeight:600 }}>
+          {displayPpm != null ? `~${Math.round(displayPpm)} ppm` : '0 ppm'}
+        </span>
       </div>
       <div style={{ background:'var(--surface3)', borderRadius:6, height:8, overflow:'hidden' }}>
-        <div style={{ width:`${pct}%`, height:'100%', borderRadius:6, background:`linear-gradient(90deg, #00e5a0, ${col})`, boxShadow: ppm>100?`0 0 8px ${col}80`:'none', transition:'width 1s ease, background 0.5s' }} />
+        <div style={{ width:`${pct}%`, height:'100%', borderRadius:6, background:`linear-gradient(90deg, #00e5a0, ${col})`, transition:'width 1s ease' }} />
       </div>
       <div style={{ display:'flex', justifyContent:'space-between', marginTop:4, fontFamily:'var(--font-mono)', fontSize:9, color:'var(--text-3)' }}>
-        <span>0</span><span>200</span><span>500</span><span>1000 ppm</span>
+        <span>0</span><span>300</span><span>500</span><span>1000 ppm</span>
       </div>
     </div>
   )
@@ -139,7 +171,7 @@ function BarChart({ data, color }) {
     <div style={{ display:'flex', alignItems:'flex-end', gap:4, height:80 }}>
       {data.map((d,i)=>(
         <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:4, height:'100%', justifyContent:'flex-end' }}>
-          <div style={{ width:'100%', borderRadius:'3px 3px 0 0', height:`${(d.value/max)*64}px`, minHeight:d.value>0?3:0, background:color, boxShadow:d.value>0?`0 0 8px ${color}80`:'none', transition:'height 0.6s cubic-bezier(.4,0,.2,1)', opacity:d.value>0?1:0.15 }} />
+          <div style={{ width:'100%', borderRadius:'3px 3px 0 0', height:`${(d.value/max)*64}px`, minHeight:d.value>0?3:0, background:color, transition:'height 0.6s cubic-bezier(.4,0,.2,1)', opacity:d.value>0?1:0.15 }} />
           <span style={{ fontFamily:'var(--font-mono)', fontSize:9, color:'var(--text-3)' }}>{d.label}</span>
         </div>
       ))}
@@ -165,273 +197,358 @@ function DualBarChart({ data }) {
   )
 }
 
+// ── Cylinder Selector ──────────────────────────────────────────────────────
+function CylinderSelector({ selectedId, onChange }) {
+  return (
+    <div>
+      <SectionTitle>⚖️ Gas Cylinder Size</SectionTitle>
+      <p style={{ fontFamily:'var(--font-body)', fontSize:13, color:'var(--text-2)', marginBottom:14, lineHeight:1.6 }}>
+        Select the size of your LPG cylinder. The app uses this to calculate gas level (%) from the load cell weight reading.
+      </p>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
+        {CYLINDER_PRESETS.map(p => {
+          const active = p.id === selectedId
+          return (
+            <button key={p.id} onClick={() => onChange(p.id)} style={{ padding:'14px 8px', borderRadius:'var(--r-sm)', border: active?'1.5px solid #4d8eff':'1px solid var(--border)', background: active?'rgba(77,142,255,0.12)':'var(--surface2)', color: active?'#4d8eff':'var(--text-2)', fontFamily:'var(--font-disp)', fontSize:18, fontWeight:800, cursor:'pointer', transition:'all 0.2s', display:'flex', flexDirection:'column', alignItems:'center', gap:4 }}>
+              {p.label}
+              <span style={{ fontFamily:'var(--font-mono)', fontSize:9, color:active?'rgba(77,142,255,0.8)':'var(--text-3)', fontWeight:400 }}>{(p.net_g/1000).toFixed(0)}kg gas</span>
+              <span style={{ fontFamily:'var(--font-mono)', fontSize:9, color:'var(--text-3)', fontWeight:400 }}>tare {(p.tare_g/1000).toFixed(0)}kg</span>
+            </button>
+          )
+        })}
+      </div>
+      <div style={{ marginTop:12, padding:'10px 14px', borderRadius:'var(--r-sm)', background:'var(--surface2)', border:'1px solid var(--border)', fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-3)', lineHeight:1.7 }}>
+        Formula: <span style={{ color:'var(--text-2)' }}>(weight_grams − tare) ÷ net_gas × 100</span> · Clamped 0–100%
+      </div>
+    </div>
+  )
+}
+
+// ── Cooking Mode Toggle ────────────────────────────────────────────────────
+function CookingModeToggle({ active, onToggle }) {
+  return (
+    <button onClick={onToggle} title={active?'Cooking Mode ON — tap to disable':'Pause MQ6 alerts while cooking'} style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 10px', borderRadius:20, border: active?'1px solid rgba(255,176,32,0.5)':'1px solid var(--border)', background: active?'rgba(255,176,32,0.12)':'var(--surface2)', color: active?'#ffb020':'var(--text-3)', fontFamily:'var(--font-mono)', fontSize:10, fontWeight:500, cursor:'pointer', transition:'all 0.25s', letterSpacing:'0.04em', whiteSpace:'nowrap' }}>
+      <span style={{ fontSize:13 }}>🍳</span>
+      {active ? 'COOKING ON' : 'COOKING'}
+    </button>
+  )
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ═══════════════════════════════════════════════════════════════════════════
 export default function App() {
-  const [tab,setTab]                     = useState('dashboard')
-  const [gasLevel,setGasLevel]           = useState(72)
-  const [levelHistory,setLevelHistory]   = useState([72])
-  const [connected,setConnected]         = useState(false)
-  const [lastSeen,setLastSeen]           = useState(new Date())
-  const [loaded,setLoaded]               = useState(false)
-  const [demoMode]                       = useState(!isConfigured())
-  // MQ6 state
-  const [severity,setSeverity]           = useState('safe')
-  const [currentPpm,setCurrentPpm]       = useState(null)
-  const [currentRaw,setCurrentRaw]       = useState(null)
-  const [ppmHistory,setPpmHistory]       = useState([])
-  const [alarmBanner,setAlarmBanner]     = useState(false)
-  const [alerts,setAlerts]               = useState([])
-  const [totalLeaks,setTotalLeaks]       = useState(0)
-  // Analytics
-  const [weeklyUsage,setWeeklyUsage]     = useState([])
-  const [weeklyLeaks,setWeeklyLeaks]     = useState([])
+  const [tab,setTab]                           = useState('dashboard')
+  const [rawWeightG,setRawWeightG]             = useState(null)
+  const [gasLevel,setGasLevel]                 = useState(0)
+  const [levelHistory,setLevelHistory]         = useState([])
+  const [connected,setConnected]               = useState(false)
+  const [lastSeen,setLastSeen]                 = useState(new Date())
+  const [loaded,setLoaded]                     = useState(false)
+  const [demoMode]                             = useState(!isConfigured())
+  const [cylinderId,setCylinderIdRaw]          = useState(() => localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)
+  const cylinderPreset                         = CYLINDER_PRESETS.find(p=>p.id===cylinderId) || CYLINDER_PRESETS[1]
+  const setCylinderId = id => { setCylinderIdRaw(id); localStorage.setItem('gaswatch_cylinder', id) }
+  const [severity,setSeverity]                 = useState('safe')
+  const [currentPpm,setCurrentPpm]             = useState(null)
+  const [currentRaw,setCurrentRaw]             = useState(null)
+  const [ppmHistory,setPpmHistory]             = useState([])
+  const [alarmBanner,setAlarmBanner]           = useState(false)
+  const [alerts,setAlerts]                     = useState([])
+  const [totalLeaks,setTotalLeaks]             = useState(0)
+  const [cookingMode,setCookingModeRaw]        = useState(() => localStorage.getItem('gaswatch_cooking')==='true')
+  const [cookingStart,setCookingStart]         = useState(null)
+  const cookingRef                             = useRef(cookingMode)
+  const setCookingMode = val => {
+    setCookingModeRaw(val); cookingRef.current = val
+    localStorage.setItem('gaswatch_cooking', val?'true':'false')
+    if (val) { setCookingStart(Date.now()) }
+    else     { setCookingStart(null); setAlarmBanner(false); clearInterval(alarmTimer.current) }
+  }
+  const [weeklyUsage,setWeeklyUsage]           = useState([])
+  const [weeklyLeaks,setWeeklyLeaks]           = useState([])
   const [weeklyLeaksBySev,setWeeklyLeaksBySev] = useState([])
-  const [weeklyPpm,setWeeklyPpm]         = useState([])
-  const [avgPpm7d,setAvgPpm7d]           = useState(null)
-  const [maxPpm7d,setMaxPpm7d]           = useState(null)
-  const [highLeaks7d,setHighLeaks7d]     = useState(0)
-  const [lowLeaks7d,setLowLeaks7d]       = useState(0)
+  const [weeklyPpm,setWeeklyPpm]               = useState([])
+  const [avgPpm7d,setAvgPpm7d]                 = useState(null)
+  const [maxPpm7d,setMaxPpm7d]                 = useState(null)
+  const [highLeaks7d,setHighLeaks7d]           = useState(0)
+  const [lowLeaks7d,setLowLeaks7d]             = useState(0)
 
-  const audioCtx   = useRef(null)
+  const audioCtx = useRef(null)
   const alarmTimer = useRef(null)
 
-  const playAlarm = useCallback(() => {
+  // Auto-off cooking mode after 2 hours
+  useEffect(() => {
+    if (!cookingMode || !cookingStart) return
+    const ms = 2*60*60*1000 - (Date.now()-cookingStart)
+    if (ms<=0) { setCookingMode(false); return }
+    const t = setTimeout(()=>setCookingMode(false), ms)
+    return ()=>clearTimeout(t)
+  }, [cookingMode, cookingStart])
+
+  // Recompute % when weight or cylinder changes
+  useEffect(() => {
+    if (rawWeightG==null) return
+    setGasLevel(weightToPercent(rawWeightG, cylinderPreset))
+  }, [rawWeightG, cylinderPreset])
+
+  const playAlarm = useCallback(()=>{
     try {
-      if (!audioCtx.current) audioCtx.current = new AudioContext()
-      const ctx = audioCtx.current
-      [[880,0],[660,0.2],[880,0.4],[660,0.6]].forEach(([freq,t]) => {
+      if (!audioCtx.current) audioCtx.current=new AudioContext()
+      const ctx=audioCtx.current
+      [[880,0],[660,0.2],[880,0.4],[660,0.6]].forEach(([freq,t])=>{
         const osc=ctx.createOscillator(),gain=ctx.createGain()
-        osc.connect(gain); gain.connect(ctx.destination)
-        osc.type='sawtooth'; osc.frequency.value=freq
+        osc.connect(gain);gain.connect(ctx.destination)
+        osc.type='sawtooth';osc.frequency.value=freq
         gain.gain.setValueAtTime(0.18,ctx.currentTime+t)
         gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+t+0.18)
-        osc.start(ctx.currentTime+t); osc.stop(ctx.currentTime+t+0.2)
+        osc.start(ctx.currentTime+t);osc.stop(ctx.currentTime+t+0.2)
       })
-    } catch(_) {}
-  }, [])
+    } catch(_){}
+  },[])
 
-  const handleLeakEvent = useCallback((sev, id, ts, ppm, raw) => {
-    setSeverity(sev)
-    setLastSeen(new Date(ts || Date.now()))
-    if (ppm != null) { setCurrentPpm(ppm); setPpmHistory(h => [...h.slice(-59), ppm]) }
-    if (raw != null)   setCurrentRaw(raw)
-    if (sev !== 'safe') {
-      const alert = { id: id||Date.now(), severity:sev, time:fmtTime(ts||Date.now()), date:fmtDate(ts||Date.now()),
-        msg: sev==='high'?'CRITICAL gas leakage detected!':'Minor gas leakage detected', ppm, raw }
-      setAlerts(prev => [alert, ...prev.slice(0,99)])
-      if (sev === 'high') {
-        setTotalLeaks(t => t+1); setAlarmBanner(true); playAlarm()
-        clearInterval(alarmTimer.current); alarmTimer.current = setInterval(playAlarm, 2500)
+  const handleLeakEvent = useCallback((sev,id,ts,rawPpm,raw)=>{
+    const fPpm = filterPpm(rawPpm)
+    const fSev = filterSeverity(sev,rawPpm)
+    setSeverity(fSev)
+    setLastSeen(new Date(ts||Date.now()))
+    setCurrentPpm(fPpm)
+    if (fPpm!=null) setPpmHistory(h=>[...h.slice(-59),fPpm])
+    if (raw!=null) setCurrentRaw(raw)
+    if (cookingRef.current) { setAlarmBanner(false); clearInterval(alarmTimer.current); return }
+    if (fSev!=='safe') {
+      const a={id:id||Date.now(),severity:fSev,time:fmtTime(ts||Date.now()),date:fmtDate(ts||Date.now()),msg:fSev==='high'?'CRITICAL gas leakage detected!':'Minor gas leakage detected',ppm:fPpm,raw}
+      setAlerts(prev=>[a,...prev.slice(0,99)])
+      if (fSev==='high') {
+        setTotalLeaks(t=>t+1);setAlarmBanner(true);playAlarm()
+        clearInterval(alarmTimer.current);alarmTimer.current=setInterval(playAlarm,2500)
       }
-    } else { setAlarmBanner(false); clearInterval(alarmTimer.current) }
-  }, [playAlarm])
+    } else { setAlarmBanner(false);clearInterval(alarmTimer.current) }
+  },[playAlarm])
 
-  useEffect(() => {
+  useEffect(()=>{
     if (demoMode) {
-      setTimeout(() => setLoaded(true), 300)
-      const DL = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
-      setWeeklyLeaks(DL.map((l,i) => ({ label:l, value:[0,2,1,0,3,0,1][i] })))
-      setWeeklyLeaksBySev(DL.map((l,i) => ({ label:l, high:[0,1,0,0,1,0,1][i], low:[0,1,1,0,2,0,0][i] })))
-      setWeeklyUsage(DL.map((l,i) => ({ label:l, value:[68,65,63,61,58,55,72][i] })))
-      setWeeklyPpm(DL.map((l,i) => ({ label:l, value:[48,95,62,44,180,55,72][i] })))
-      setCurrentPpm(52); setCurrentRaw(218); setAvgPpm7d(79); setMaxPpm7d(650)
-      setHighLeaks7d(2); setLowLeaks7d(5)
-      setPpmHistory([48,52,55,61,58,44,50,220,55,48,52,65,48,53,50,44,48,52,55,650,55,48,50])
+      setTimeout(()=>setLoaded(true),300)
+      const DL=['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+      setWeeklyLeaks(DL.map((l,i)=>({label:l,value:[0,2,1,0,3,0,1][i]})))
+      setWeeklyLeaksBySev(DL.map((l,i)=>({label:l,high:[0,1,0,0,1,0,1][i],low:[0,1,1,0,2,0,0][i]})))
+      setWeeklyPpm(DL.map((l,i)=>({label:l,value:[0,350,0,0,420,0,0][i]})))
+      setRawWeightG(11400)
+      setWeeklyUsage(DL.map((l,i)=>({label:l,value:[68,65,63,61,58,55,57][i]})))
+      setLevelHistory([68,65,63,61,58,55,57])
+      setCurrentPpm(null);setCurrentRaw(218)
+      setAvgPpm7d(null);setMaxPpm7d(750)
+      setHighLeaks7d(2);setLowLeaks7d(5)
+      setPpmHistory([0,0,0,0,350,0,0,750,0,0,0,0])
       setAlerts([
-        { id:1, severity:'high', time:'10:24:15', date:'Jun 3', msg:'CRITICAL gas leakage detected!', ppm:650 },
-        { id:2, severity:'low',  time:'08:12:03', date:'Jun 3', msg:'Minor gas leakage detected',     ppm:220 },
-        { id:3, severity:'low',  time:'22:05:41', date:'Jun 2', msg:'Minor gas leakage detected',     ppm:195 },
+        {id:1,severity:'high',time:'10:24:15',date:'Jun 3',msg:'CRITICAL gas leakage detected!',ppm:750},
+        {id:2,severity:'low', time:'08:12:03',date:'Jun 3',msg:'Minor gas leakage detected',    ppm:350},
+        {id:3,severity:'low', time:'22:05:41',date:'Jun 2',msg:'Minor gas leakage detected',    ppm:320},
       ])
-      setTotalLeaks(7); setConnected(false)
-      const iv = setInterval(() => {
-        setGasLevel(prev => { const n=genDemoLevel(prev); setLevelHistory(h=>[...h.slice(-59),n]); return n })
-        const i=demoIdx++%demoSevs.length; const sev=demoSevs[i]; const ppm=demoPpm[i]
-        setSeverity(sev); setCurrentPpm(ppm); setPpmHistory(h=>[...h.slice(-59),ppm]); setLastSeen(new Date())
-        if (sev!=='safe') {
-          const a={id:Date.now(),severity:sev,ppm,time:fmtTime(Date.now()),date:fmtDate(Date.now()),msg:sev==='high'?'CRITICAL gas leakage detected!':'Minor gas leakage detected'}
+      setTotalLeaks(7);setConnected(false)
+      const iv=setInterval(()=>{
+        setRawWeightG(prev=>{
+          const nw=genDemoWeight(prev)
+          const pr=CYLINDER_PRESETS.find(p=>p.id===(localStorage.getItem('gaswatch_cylinder')||DEFAULT_CYLINDER))||CYLINDER_PRESETS[1]
+          setLevelHistory(h=>[...h.slice(-59),weightToPercent(nw,pr)])
+          return nw
+        })
+        const i=demoIdx++%demoSevs.length
+        const fPpm=filterPpm(demoPpm[i]);const fSev=filterSeverity(demoSevs[i],demoPpm[i])
+        setSeverity(fSev);setCurrentPpm(fPpm)
+        if (fPpm!=null) setPpmHistory(h=>[...h.slice(-59),fPpm])
+        setLastSeen(new Date())
+        if (!cookingRef.current&&fSev!=='safe') {
+          const a={id:Date.now(),severity:fSev,ppm:fPpm,time:fmtTime(Date.now()),date:fmtDate(Date.now()),msg:fSev==='high'?'CRITICAL gas leakage detected!':'Minor gas leakage detected'}
           setAlerts(p=>[a,...p.slice(0,99)])
-          if (sev==='high') { setTotalLeaks(t=>t+1); setAlarmBanner(true); playAlarm(); clearInterval(alarmTimer.current); alarmTimer.current=setInterval(playAlarm,2500) }
-        } else { setAlarmBanner(false); clearInterval(alarmTimer.current) }
-      }, 3500)
-      return () => { clearInterval(iv); clearInterval(alarmTimer.current) }
+          if (fSev==='high') {setTotalLeaks(t=>t+1);setAlarmBanner(true);playAlarm();clearInterval(alarmTimer.current);alarmTimer.current=setInterval(playAlarm,2500)}
+        } else if(fSev==='safe'){setAlarmBanner(false);clearInterval(alarmTimer.current)}
+      },3500)
+      return ()=>{clearInterval(iv);clearInterval(alarmTimer.current)}
     }
 
-    let levelCh, leakCh
+    let levelCh,leakCh
     async function init() {
-      // Gas levels
-      const { data:lvls } = await supabase.from('gas_levels').select('level_percent,created_at').order('created_at',{ascending:false}).limit(60)
-      if (lvls?.length > 0) {
-        const arr = lvls.map(r=>r.level_percent).reverse()
-        setGasLevel(arr[arr.length-1]); setLevelHistory(arr); setLastSeen(new Date(lvls[0].created_at)); setConnected(true)
+      const {data:lvls}=await supabase.from('gas_levels').select('weight_grams,created_at').order('created_at',{ascending:false}).limit(60)
+      if (lvls?.length>0) {
+        setRawWeightG(lvls[0].weight_grams);setLastSeen(new Date(lvls[0].created_at));setConnected(true)
+        const pr=CYLINDER_PRESETS.find(p=>p.id===(localStorage.getItem('gaswatch_cylinder')||DEFAULT_CYLINDER))||CYLINDER_PRESETS[1]
+        setLevelHistory(lvls.map(r=>weightToPercent(r.weight_grams,pr)).reverse())
       }
-      // MQ6 leakages — full fields
-      const { data:leaks } = await supabase.from('gas_leakages').select('id,severity,raw_value,ppm_approx,created_at').order('created_at',{ascending:false}).limit(100)
-      if (leaks?.length > 0) {
-        const latest=leaks[0]
-        setSeverity(latest.severity)
-        if (latest.ppm_approx!=null) setCurrentPpm(latest.ppm_approx)
-        if (latest.raw_value!=null)  setCurrentRaw(latest.raw_value)
-        setPpmHistory(leaks.slice(0,60).map(r=>r.ppm_approx??0).reverse())
-        setAlerts(leaks.map(r=>({ id:r.id, severity:r.severity, time:fmtTime(r.created_at), date:fmtDate(r.created_at),
-          msg:r.severity==='high'?'CRITICAL gas leakage detected!':r.severity==='low'?'Minor gas leakage detected':'System reading — safe',
-          ppm:r.ppm_approx, raw:r.raw_value })))
-        setTotalLeaks(leaks.filter(r=>r.severity!=='safe').length)
-        setConnected(true)
+      const {data:leaks}=await supabase.from('gas_leakages').select('id,severity,raw_value,ppm_approx,created_at').order('created_at',{ascending:false}).limit(100)
+      if (leaks?.length>0) {
+        const l=leaks[0]
+        setSeverity(filterSeverity(l.severity,l.ppm_approx));setCurrentPpm(filterPpm(l.ppm_approx))
+        if (l.raw_value!=null) setCurrentRaw(l.raw_value)
+        setPpmHistory(leaks.slice(0,60).map(r=>filterPpm(r.ppm_approx)??0).reverse())
+        const filtered=leaks.filter(r=>filterSeverity(r.severity,r.ppm_approx)!=='safe')
+        setAlerts(filtered.map(r=>({id:r.id,severity:filterSeverity(r.severity,r.ppm_approx),time:fmtTime(r.created_at),date:fmtDate(r.created_at),msg:r.severity==='high'?'CRITICAL gas leakage detected!':'Minor gas leakage detected',ppm:filterPpm(r.ppm_approx),raw:r.raw_value})))
+        setTotalLeaks(filtered.length);setConnected(true)
       }
-      // Weekly analytics
-      const sevenAgo = new Date(Date.now()-7*86400000).toISOString()
-      const { data:wLvls } = await supabase.from('gas_levels').select('level_percent,created_at').gte('created_at',sevenAgo)
-      if (wLvls?.length > 0) {
-        const sums={},cnts={}; DAYS.forEach(d=>{sums[d]=0;cnts[d]=0})
-        wLvls.forEach(r=>{ const d=DAYS[new Date(r.created_at).getDay()]; sums[d]+=r.level_percent; cnts[d]++ })
-        setWeeklyUsage(DAYS.map(d=>({ label:d.slice(0,3), value:cnts[d]>0?Math.round(sums[d]/cnts[d]):0 })))
-      } else { setWeeklyUsage(DAYS.map(d=>({ label:d.slice(0,3), value:0 }))) }
-
-      const { data:wLeaks } = await supabase.from('gas_leakages').select('severity,ppm_approx,created_at').gte('created_at',sevenAgo)
-      if (wLeaks?.length > 0) {
+      const sevenAgo=new Date(Date.now()-7*86400000).toISOString()
+      const {data:wLvls}=await supabase.from('gas_levels').select('weight_grams,created_at').gte('created_at',sevenAgo)
+      if (wLvls?.length>0) {
+        const pr=CYLINDER_PRESETS.find(p=>p.id===(localStorage.getItem('gaswatch_cylinder')||DEFAULT_CYLINDER))||CYLINDER_PRESETS[1]
+        const sums={},cnts={};DAYS.forEach(d=>{sums[d]=0;cnts[d]=0})
+        wLvls.forEach(r=>{const d=DAYS[new Date(r.created_at).getDay()];sums[d]+=weightToPercent(r.weight_grams,pr);cnts[d]++})
+        setWeeklyUsage(DAYS.map(d=>({label:d.slice(0,3),value:cnts[d]>0?Math.round(sums[d]/cnts[d]):0})))
+      } else setWeeklyUsage(DAYS.map(d=>({label:d.slice(0,3),value:0})))
+      const {data:wLeaks}=await supabase.from('gas_leakages').select('severity,ppm_approx,created_at').gte('created_at',sevenAgo)
+      if (wLeaks?.length>0) {
         const counts={},bySev={},ppmS={},ppmC={}
-        DAYS.forEach(d=>{ counts[d]=0; bySev[d]={high:0,low:0}; ppmS[d]=0; ppmC[d]=0 })
+        DAYS.forEach(d=>{counts[d]=0;bySev[d]={high:0,low:0};ppmS[d]=0;ppmC[d]=0})
         let sumP=0,cntP=0,maxP=0,cH=0,cL=0
         wLeaks.forEach(r=>{
           const d=DAYS[new Date(r.created_at).getDay()]
-          if (r.severity!=='safe') counts[d]++
-          if (r.severity==='high') { bySev[d].high++; cH++ }
-          if (r.severity==='low')  { bySev[d].low++;  cL++ }
-          if (r.ppm_approx!=null) { ppmS[d]+=r.ppm_approx; ppmC[d]++; sumP+=r.ppm_approx; cntP++; if(r.ppm_approx>maxP) maxP=r.ppm_approx }
+          const fSev=filterSeverity(r.severity,r.ppm_approx);const fPpm=filterPpm(r.ppm_approx)
+          if(fSev!=='safe')counts[d]++;if(fSev==='high'){bySev[d].high++;cH++};if(fSev==='low'){bySev[d].low++;cL++}
+          if(fPpm!=null){ppmS[d]+=fPpm;ppmC[d]++;sumP+=fPpm;cntP++;if(fPpm>maxP)maxP=fPpm}
         })
-        setWeeklyLeaks(DAYS.map(d=>({ label:d.slice(0,3), value:counts[d] })))
-        setWeeklyLeaksBySev(DAYS.map(d=>({ label:d.slice(0,3), high:bySev[d].high, low:bySev[d].low })))
-        setWeeklyPpm(DAYS.map(d=>({ label:d.slice(0,3), value:ppmC[d]>0?Math.round(ppmS[d]/ppmC[d]):0 })))
-        setAvgPpm7d(cntP>0?Math.round(sumP/cntP):null); setMaxPpm7d(maxP>0?Math.round(maxP):null)
-        setHighLeaks7d(cH); setLowLeaks7d(cL)
+        setWeeklyLeaks(DAYS.map(d=>({label:d.slice(0,3),value:counts[d]})))
+        setWeeklyLeaksBySev(DAYS.map(d=>({label:d.slice(0,3),high:bySev[d].high,low:bySev[d].low})))
+        setWeeklyPpm(DAYS.map(d=>({label:d.slice(0,3),value:ppmC[d]>0?Math.round(ppmS[d]/ppmC[d]):0})))
+        setAvgPpm7d(cntP>0?Math.round(sumP/cntP):null);setMaxPpm7d(maxP>0?Math.round(maxP):null)
+        setHighLeaks7d(cH);setLowLeaks7d(cL)
       } else {
-        setWeeklyLeaks(DAYS.map(d=>({label:d.slice(0,3),value:0}))); setWeeklyLeaksBySev(DAYS.map(d=>({label:d.slice(0,3),high:0,low:0}))); setWeeklyPpm(DAYS.map(d=>({label:d.slice(0,3),value:0})))
+        setWeeklyLeaks(DAYS.map(d=>({label:d.slice(0,3),value:0})));setWeeklyLeaksBySev(DAYS.map(d=>({label:d.slice(0,3),high:0,low:0})));setWeeklyPpm(DAYS.map(d=>({label:d.slice(0,3),value:0})))
       }
       setLoaded(true)
     }
     init()
-
-    levelCh = supabase.channel('rt-levels').on('postgres_changes',{event:'INSERT',schema:'public',table:'gas_levels'},p=>{
-      setGasLevel(p.new.level_percent); setLevelHistory(h=>[...h.slice(-59),p.new.level_percent])
-      setLastSeen(new Date(p.new.created_at)); setConnected(true)
+    levelCh=supabase.channel('rt-levels').on('postgres_changes',{event:'INSERT',schema:'public',table:'gas_levels'},p=>{
+      setRawWeightG(p.new.weight_grams);setLastSeen(new Date(p.new.created_at));setConnected(true)
     }).subscribe()
-
-    leakCh = supabase.channel('rt-leakages').on('postgres_changes',{event:'INSERT',schema:'public',table:'gas_leakages'},p=>{
-      const {severity:sev,id,created_at,ppm_approx,raw_value} = p.new
-      handleLeakEvent(sev,id,created_at,ppm_approx,raw_value); setConnected(true)
-      if (ppm_approx!=null) {
-        const day=DAYS[new Date(created_at).getDay()].slice(0,3)
-        setWeeklyPpm(prev=>prev.map(d=>d.label===day?{...d,value:Math.round((d.value+ppm_approx)/2)}:d))
-      }
-      if (sev!=='safe') {
-        const day=DAYS[new Date(created_at).getDay()].slice(0,3)
-        setWeeklyLeaks(prev=>prev.map(d=>d.label===day?{...d,value:d.value+1}:d))
-        setWeeklyLeaksBySev(prev=>prev.map(d=>d.label!==day?d:{...d,high:d.high+(sev==='high'?1:0),low:d.low+(sev==='low'?1:0)}))
-        if (sev==='high') setHighLeaks7d(n=>n+1)
-        if (sev==='low')  setLowLeaks7d(n=>n+1)
-      }
+    leakCh=supabase.channel('rt-leakages').on('postgres_changes',{event:'INSERT',schema:'public',table:'gas_leakages'},p=>{
+      const{severity:sev,id,created_at,ppm_approx,raw_value}=p.new
+      handleLeakEvent(sev,id,created_at,ppm_approx,raw_value);setConnected(true)
+      const fPpm=filterPpm(ppm_approx);const fSev=filterSeverity(sev,ppm_approx)
+      if(fPpm!=null){const day=DAYS[new Date(created_at).getDay()].slice(0,3);setWeeklyPpm(prev=>prev.map(d=>d.label===day?{...d,value:Math.round((d.value+fPpm)/2)}:d))}
+      if(fSev!=='safe'){const day=DAYS[new Date(created_at).getDay()].slice(0,3);setWeeklyLeaks(prev=>prev.map(d=>d.label===day?{...d,value:d.value+1}:d));setWeeklyLeaksBySev(prev=>prev.map(d=>d.label!==day?d:{...d,high:d.high+(fSev==='high'?1:0),low:d.low+(fSev==='low'?1:0)}));if(fSev==='high')setHighLeaks7d(n=>n+1);if(fSev==='low')setLowLeaks7d(n=>n+1)}
     }).subscribe()
+    return ()=>{supabase.removeChannel(levelCh);supabase.removeChannel(leakCh);clearInterval(alarmTimer.current)}
+  },[demoMode,handleLeakEvent,playAlarm])
 
-    return () => { supabase.removeChannel(levelCh); supabase.removeChannel(leakCh); clearInterval(alarmTimer.current) }
-  }, [demoMode, handleLeakEvent, playAlarm])
+  const displaySev  = cookingMode ? 'safe' : severity
+  const displayPpm  = cookingMode ? null   : currentPpm
+  const sCol        = cookingMode ? C.safe : C[severity]
+  const lCol        = levelColor(gasLevel)
+  const rules       = getRecommendations(displaySev, gasLevel, displayPpm)
+  const estDays     = gasLevel>0 ? Math.max(0,Math.ceil(gasLevel/2.1)) : 0
+  const nonSafeAlerts = alerts.filter(a=>a.severity!=='safe')
 
-  const sCol    = C[severity]
-  const lCol    = levelColor(gasLevel)
-  const rules   = getRecommendations(severity, gasLevel, currentPpm)
-  const estDays = Math.max(0, Math.ceil(gasLevel / 2.1))
-  const nonSafeAlerts = alerts.filter(a => a.severity !== 'safe')
-
-  const navItems = [
-    { id:'dashboard', label:'Dashboard', icon:'◈' },
-    { id:'alerts',    label:'Alerts',    icon:'◉', badge: nonSafeAlerts.length },
-    { id:'analytics', label:'Analytics', icon:'◎' },
-    { id:'device',    label:'Device',    icon:'◇' },
+  const navItems=[
+    {id:'dashboard',label:'Dashboard',icon:'◈'},
+    {id:'alerts',   label:'Alerts',   icon:'◉',badge:nonSafeAlerts.length},
+    {id:'analytics',label:'Analytics',icon:'◎'},
+    {id:'device',   label:'Device',   icon:'◇'},
   ]
 
   if (!loaded) return (
-    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:16 }}>
-      <div style={{ width:40, height:40, border:'2px solid var(--border2)', borderTopColor:'#00e5a0', borderRadius:'50%', animation:'spin 0.8s linear infinite' }} />
-      <span style={{ fontFamily:'var(--font-mono)', fontSize:12, color:'var(--text-3)', letterSpacing:'0.1em' }}>INITIALISING</span>
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:16}}>
+      <div style={{width:40,height:40,border:'2px solid var(--border2)',borderTopColor:'#00e5a0',borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/>
+      <span style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--text-3)',letterSpacing:'0.1em'}}>INITIALISING</span>
     </div>
   )
 
   return (
-    <div style={{ minHeight:'100vh', background:'var(--bg)' }}>
+    <div style={{minHeight:'100vh',background:'var(--bg)'}}>
+
       {/* HEADER */}
-      <header style={{ position:'sticky', top:0, zIndex:200, background:'rgba(10,14,26,0.9)', backdropFilter:'blur(16px)', borderBottom:'1px solid var(--border)', padding:'0 20px', height:56, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          <div style={{ width:32, height:32, borderRadius:10, background:'linear-gradient(135deg,#ff6b35,#ff4560)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, boxShadow:'0 0 16px rgba(255,69,96,0.4)' }}>🔥</div>
+      <header style={{position:'sticky',top:0,zIndex:200,background:'rgba(10,14,26,0.9)',backdropFilter:'blur(16px)',borderBottom:'1px solid var(--border)',padding:'0 16px',height:56,display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+          <div style={{width:32,height:32,borderRadius:10,background:'linear-gradient(135deg,#ff6b35,#ff4560)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,boxShadow:'0 0 16px rgba(255,69,96,0.4)'}}>🔥</div>
           <div>
-            <div style={{ fontFamily:'var(--font-disp)', fontSize:17, fontWeight:800, lineHeight:1, letterSpacing:'-0.02em' }}>GasWatch <span style={{ color:'#4d8eff' }}>Pro</span></div>
-            <div style={{ fontFamily:'var(--font-mono)', fontSize:9, color:'var(--text-3)', letterSpacing:'0.12em' }}>{demoMode?'DEMO MODE':'LIVE · IOT MONITORING'}</div>
+            <div style={{fontFamily:'var(--font-disp)',fontSize:17,fontWeight:800,lineHeight:1,letterSpacing:'-0.02em'}}>GasWatch <span style={{color:'#4d8eff'}}>Pro</span></div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text-3)',letterSpacing:'0.12em'}}>{demoMode?'DEMO MODE':'LIVE · IOT MONITORING'}</div>
           </div>
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <span style={{ fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-3)' }}>{lastSeen.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
-          <div style={{ display:'flex', alignItems:'center', gap:5, padding:'3px 8px', borderRadius:20, background:'var(--surface2)', border:'1px solid var(--border)' }}>
-            <StatusDot online={connected} />
-            <span style={{ fontFamily:'var(--font-mono)', fontSize:10, color:connected?'#00e5a0':'#ff4560' }}>{connected?'ONLINE':demoMode?'DEMO':'OFFLINE'}</span>
+        <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'nowrap'}}>
+          <CookingModeToggle active={cookingMode} onToggle={()=>setCookingMode(!cookingMode)}/>
+          <span style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-3)'}}>{lastSeen.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
+          <div style={{display:'flex',alignItems:'center',gap:5,padding:'3px 8px',borderRadius:20,background:'var(--surface2)',border:'1px solid var(--border)'}}>
+            <StatusDot online={connected}/>
+            <span style={{fontFamily:'var(--font-mono)',fontSize:10,color:connected?'#00e5a0':'#ff4560'}}>{connected?'ONLINE':demoMode?'DEMO':'OFFLINE'}</span>
           </div>
-          <Chip label={severity.toUpperCase()} color={sCol.main} border={sCol.border} bg={sCol.dim} />
+          <Chip label={displaySev.toUpperCase()} color={sCol.main} border={sCol.border} bg={sCol.dim}/>
         </div>
       </header>
 
-      {/* ALARM BANNER */}
-      {alarmBanner && (
-        <div style={{ position:'sticky', top:56, zIndex:190, background:'rgba(255,69,96,0.12)', borderBottom:'1px solid rgba(255,69,96,0.3)', padding:'12px 20px', display:'flex', alignItems:'center', justifyContent:'space-between', animation:'shimmer 0.8s ease infinite' }}>
-          <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-            <span style={{ fontSize:22 }}>🚨</span>
+      {/* COOKING MODE BANNER */}
+      {cookingMode&&(
+        <div style={{position:'sticky',top:56,zIndex:190,background:'rgba(255,176,32,0.10)',borderBottom:'1px solid rgba(255,176,32,0.25)',padding:'10px 20px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <span style={{fontSize:18}}>🍳</span>
             <div>
-              <div style={{ fontFamily:'var(--font-disp)', fontWeight:700, color:'#ff4560', fontSize:14 }}>CRITICAL GAS LEAKAGE DETECTED{currentPpm?` · ~${Math.round(currentPpm)} ppm`:''}</div>
-              <div style={{ fontFamily:'var(--font-mono)', fontSize:11, color:'rgba(255,69,96,0.8)', marginTop:2 }}>Evacuate immediately · Cut power · Call emergency services</div>
+              <div style={{fontFamily:'var(--font-disp)',fontWeight:700,color:'#ffb020',fontSize:13}}>Cooking Mode — MQ6 alerts paused</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'rgba(255,176,32,0.7)',marginTop:1}}>Gas leak detection suppressed · Auto-off after 2 hours for safety</div>
             </div>
           </div>
-          <button onClick={()=>{ setAlarmBanner(false); clearInterval(alarmTimer.current) }} style={{ padding:'6px 14px', borderRadius:8, fontSize:12, fontWeight:600, background:'#ff4560', color:'#fff', fontFamily:'var(--font-body)', boxShadow:'0 0 16px rgba(255,69,96,0.4)' }}>Dismiss</button>
+          <button onClick={()=>setCookingMode(false)} style={{padding:'5px 12px',borderRadius:8,fontSize:11,fontWeight:600,background:'rgba(255,176,32,0.2)',border:'1px solid rgba(255,176,32,0.4)',color:'#ffb020',fontFamily:'var(--font-body)',cursor:'pointer'}}>Turn Off</button>
+        </div>
+      )}
+
+      {/* ALARM BANNER */}
+      {alarmBanner&&!cookingMode&&(
+        <div style={{position:'sticky',top:56,zIndex:190,background:'rgba(255,69,96,0.12)',borderBottom:'1px solid rgba(255,69,96,0.3)',padding:'12px 20px',display:'flex',alignItems:'center',justifyContent:'space-between',animation:'shimmer 0.8s ease infinite'}}>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <span style={{fontSize:22}}>🚨</span>
+            <div>
+              <div style={{fontFamily:'var(--font-disp)',fontWeight:700,color:'#ff4560',fontSize:14}}>CRITICAL GAS LEAKAGE DETECTED{currentPpm?` · ~${Math.round(currentPpm)} ppm`:''}</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:11,color:'rgba(255,69,96,0.8)',marginTop:2}}>Evacuate immediately · Cut power · Call emergency services</div>
+            </div>
+          </div>
+          <button onClick={()=>{setAlarmBanner(false);clearInterval(alarmTimer.current)}} style={{padding:'6px 14px',borderRadius:8,fontSize:12,fontWeight:600,background:'#ff4560',color:'#fff',fontFamily:'var(--font-body)',boxShadow:'0 0 16px rgba(255,69,96,0.4)',cursor:'pointer'}}>Dismiss</button>
         </div>
       )}
 
       {/* NAV */}
-      <nav style={{ background:'rgba(10,14,26,0.8)', backdropFilter:'blur(12px)', borderBottom:'1px solid var(--border)', display:'flex', padding:'0 12px', overflowX:'auto', gap:0, WebkitOverflowScrolling:'touch' }}>
-        {navItems.map(n => (
-          <button key={n.id} onClick={()=>setTab(n.id)} style={{ padding:'14px 18px', fontSize:13, fontWeight:600, fontFamily:'var(--font-body)', color:tab===n.id?'#f0f4ff':'var(--text-3)', borderBottom:`2px solid ${tab===n.id?'#4d8eff':'transparent'}`, borderRadius:0, whiteSpace:'nowrap', transition:'color 0.2s', display:'flex', alignItems:'center', gap:6 }}>
+      <nav style={{background:'rgba(10,14,26,0.8)',backdropFilter:'blur(12px)',borderBottom:'1px solid var(--border)',display:'flex',padding:'0 12px',overflowX:'auto',gap:0,WebkitOverflowScrolling:'touch'}}>
+        {navItems.map(n=>(
+          <button key={n.id} onClick={()=>setTab(n.id)} style={{padding:'14px 18px',fontSize:13,fontWeight:600,fontFamily:'var(--font-body)',color:tab===n.id?'#f0f4ff':'var(--text-3)',borderBottom:`2px solid ${tab===n.id?'#4d8eff':'transparent'}`,borderRadius:0,whiteSpace:'nowrap',transition:'color 0.2s',display:'flex',alignItems:'center',gap:6}}>
             <span>{n.icon}</span>{n.label}
-            {n.badge>0 && <span style={{ background:'#ff4560', color:'#fff', fontSize:9, fontWeight:700, borderRadius:10, padding:'1px 5px', fontFamily:'var(--font-mono)' }}>{n.badge>99?'99+':n.badge}</span>}
+            {n.badge>0&&<span style={{background:'#ff4560',color:'#fff',fontSize:9,fontWeight:700,borderRadius:10,padding:'1px 5px',fontFamily:'var(--font-mono)'}}>{n.badge>99?'99+':n.badge}</span>}
           </button>
         ))}
       </nav>
 
-      <main style={{ padding:'20px', maxWidth:960, margin:'0 auto' }} className="fade-up">
+      <main style={{padding:'20px',maxWidth:960,margin:'0 auto'}} className="fade-up">
 
-        {/* ════ DASHBOARD ════ */}
-        {tab==='dashboard' && (
+        {/* ═══ DASHBOARD ═══ */}
+        {tab==='dashboard'&&(
           <>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))', gap:16, marginBottom:16 }}>
-              {/* DYP-L06 gauge */}
-              <Card accent={lCol.main} glow={lCol.glow} style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
-                <SectionTitle>Cylinder Level · DYP-L06</SectionTitle>
-                <ArcGauge value={gasLevel} color={lCol.main} size={160} />
-                <div style={{ marginTop:12, textAlign:'center', width:'100%' }}>
-                  <Chip label={gasLevel<20?'⚠ Replace Now':gasLevel<40?'⚠ Plan Refill':'✓ Sufficient'} color={lCol.main} border={lCol.border} bg={lCol.dim} />
-                  <div style={{ marginTop:12 }}><Sparkline data={levelHistory} color={lCol.main} height={44} /></div>
-                  <div style={{ fontFamily:'var(--font-mono)', fontSize:9, color:'var(--text-3)', marginTop:4, letterSpacing:'0.08em' }}>LAST {Math.min(levelHistory.length,60)} READINGS</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:16,marginBottom:16}}>
+
+              {/* Load Cell Gauge */}
+              <Card accent={lCol.main} glow={lCol.glow} style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
+                <SectionTitle>Cylinder Level · HX711 Load Cell</SectionTitle>
+                <ArcGauge value={gasLevel} color={lCol.main} size={160}/>
+                <div style={{marginTop:12,textAlign:'center',width:'100%'}}>
+                  <Chip label={gasLevel<20?'⚠ Replace Now':gasLevel<40?'⚠ Plan Refill':'✓ Sufficient'} color={lCol.main} border={lCol.border} bg={lCol.dim}/>
+                  {rawWeightG!=null&&(
+                    <div style={{marginTop:8,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-3)',letterSpacing:'0.06em'}}>
+                      {(rawWeightG/1000).toFixed(2)} kg on scale · {cylinderPreset.label} cylinder
+                    </div>
+                  )}
+                  <div style={{marginTop:8}}><Sparkline data={levelHistory} color={lCol.main} height={44}/></div>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text-3)',marginTop:4,letterSpacing:'0.08em'}}>LAST {Math.min(levelHistory.length,60)} READINGS</div>
                 </div>
               </Card>
 
-              {/* MQ6 status */}
-              <Card accent={sCol.main} glow={severity!=='safe'?sCol.glow:undefined} style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10 }}>
-                <SectionTitle>Leakage Status · MQ6</SectionTitle>
-                <div style={{ width:88, height:88, borderRadius:'50%', background:sCol.dim, border:`1.5px solid ${sCol.border}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:38, boxShadow:severity!=='safe'?sCol.glow:undefined, animation:severity==='high'?'pulseRed 1.2s ease infinite':severity==='safe'?'pulseGreen 3s ease infinite':undefined }}>
-                  {severity==='high'?'🚨':severity==='low'?'⚠️':'✅'}
+              {/* MQ6 Status */}
+              <Card accent={sCol.main} glow={displaySev!=='safe'?sCol.glow:undefined} style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:10}}>
+                <SectionTitle>Leakage Status · MQ6{cookingMode?' (Paused)':''}</SectionTitle>
+                <div style={{width:88,height:88,borderRadius:'50%',background:sCol.dim,border:`1.5px solid ${sCol.border}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:38,boxShadow:displaySev!=='safe'?sCol.glow:undefined,animation:displaySev==='high'?'pulseRed 1.2s ease infinite':displaySev==='safe'?'pulseGreen 3s ease infinite':undefined}}>
+                  {cookingMode?'🍳':displaySev==='high'?'🚨':displaySev==='low'?'⚠️':'✅'}
                 </div>
-                <div style={{ fontFamily:'var(--font-disp)', fontSize:24, fontWeight:800, color:sCol.main, letterSpacing:'-0.02em' }}>{severity==='high'?'CRITICAL':severity==='low'?'LOW LEAK':'ALL SAFE'}</div>
-                <Chip label={severity.toUpperCase()} color={sCol.main} border={sCol.border} bg={sCol.dim} />
-                <div style={{ width:'100%', marginTop:6 }}><PpmBar ppm={currentPpm} /></div>
-                {ppmHistory.length>2 && (
-                  <div style={{ width:'100%', marginTop:4 }}>
-                    <Sparkline data={ppmHistory} color={sCol.main} height={32} />
-                    <div style={{ fontFamily:'var(--font-mono)', fontSize:9, color:'var(--text-3)', marginTop:2, letterSpacing:'0.08em', textAlign:'center' }}>MQ6 PPM TREND</div>
+                <div style={{fontFamily:'var(--font-disp)',fontSize:24,fontWeight:800,color:sCol.main,letterSpacing:'-0.02em'}}>
+                  {cookingMode?'PAUSED':displaySev==='high'?'CRITICAL':displaySev==='low'?'LOW LEAK':'ALL SAFE'}
+                </div>
+                <Chip label={cookingMode?'COOKING MODE':displaySev.toUpperCase()} color={sCol.main} border={sCol.border} bg={sCol.dim}/>
+                <div style={{width:'100%',marginTop:6}}><PpmBar ppm={displayPpm}/></div>
+                {ppmHistory.filter(v=>v>0).length>2&&!cookingMode&&(
+                  <div style={{width:'100%',marginTop:4}}>
+                    <Sparkline data={ppmHistory} color={sCol.main} height={32}/>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text-3)',marginTop:2,letterSpacing:'0.08em',textAlign:'center'}}>MQ6 PPM TREND (≥300 ppm only)</div>
                   </div>
                 )}
               </Card>
@@ -440,16 +557,16 @@ export default function App() {
               <Card>
                 <SectionTitle>Quick Stats</SectionTitle>
                 {[
-                  { label:'Current Level',     val:`${Math.round(gasLevel)}%`,                             col:lCol.main },
-                  { label:'Est. Days Left',     val:`~${estDays}d`,                                        col:'#4d8eff' },
-                  { label:'MQ6 Reading',        val:currentPpm!=null?`~${Math.round(currentPpm)} ppm`:'— ppm', col:sCol.main },
-                  { label:'MQ6 Raw ADC',        val:currentRaw!=null?currentRaw:'—',                       col:'var(--text-2)' },
-                  { label:'Total Leak Events',  val:totalLeaks,                                            col:'#ff4560' },
-                  { label:'Avg Daily Use',       val:'~2.1%/day',                                          col:'#00e5a0' },
+                  {label:'Current Level',    val:`${Math.round(gasLevel)}%`,                                  col:lCol.main},
+                  {label:'Raw Weight',        val:rawWeightG!=null?`${(rawWeightG/1000).toFixed(2)} kg`:'—',  col:'var(--text-2)'},
+                  {label:'Est. Days Left',    val:`~${estDays}d`,                                             col:'#4d8eff'},
+                  {label:'MQ6 Reading',       val:displayPpm!=null?`~${Math.round(displayPpm)} ppm`:'0 ppm', col:sCol.main},
+                  {label:'Total Leak Events', val:totalLeaks,                                                 col:'#ff4560'},
+                  {label:'Cylinder Size',     val:cylinderPreset.label,                                       col:'#4d8eff'},
                 ].map((s,i,arr)=>(
-                  <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 0', borderBottom:i<arr.length-1?'1px solid var(--border)':'none' }}>
-                    <span style={{ fontFamily:'var(--font-body)', fontSize:13, color:'var(--text-2)' }}>{s.label}</span>
-                    <span style={{ fontFamily:'var(--font-disp)', fontSize:18, fontWeight:800, color:s.col }}>{s.val}</span>
+                  <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:i<arr.length-1?'1px solid var(--border)':'none'}}>
+                    <span style={{fontFamily:'var(--font-body)',fontSize:13,color:'var(--text-2)'}}>{s.label}</span>
+                    <span style={{fontFamily:'var(--font-disp)',fontSize:18,fontWeight:800,color:s.col}}>{s.val}</span>
                   </div>
                 ))}
               </Card>
@@ -458,11 +575,11 @@ export default function App() {
             {/* Safety Recommendations */}
             <Card accent={sCol.main}>
               <SectionTitle>⚡ Safety Recommendations</SectionTitle>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:10 }}>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:10}}>
                 {rules.map((r,i)=>(
-                  <div key={i} style={{ padding:'12px 14px', borderRadius:'var(--r-sm)', background:r.urgent?sCol.dim:'var(--surface2)', border:`1px solid ${r.urgent?sCol.border:'var(--border)'}`, display:'flex', alignItems:'flex-start', gap:10 }}>
-                    <span style={{ fontSize:16, flexShrink:0 }}>{r.icon}</span>
-                    <span style={{ fontFamily:'var(--font-body)', fontSize:13, lineHeight:'1.5', color:r.urgent?sCol.main:'var(--text-2)', fontWeight:r.urgent?600:400 }}>{r.text}</span>
+                  <div key={i} style={{padding:'12px 14px',borderRadius:'var(--r-sm)',background:r.urgent?sCol.dim:'var(--surface2)',border:`1px solid ${r.urgent?sCol.border:'var(--border)'}`,display:'flex',alignItems:'flex-start',gap:10}}>
+                    <span style={{fontSize:16,flexShrink:0}}>{r.icon}</span>
+                    <span style={{fontFamily:'var(--font-body)',fontSize:13,lineHeight:'1.5',color:r.urgent?sCol.main:'var(--text-2)',fontWeight:r.urgent?600:400}}>{r.text}</span>
                   </div>
                 ))}
               </div>
@@ -470,113 +587,116 @@ export default function App() {
           </>
         )}
 
-        {/* ════ ALERTS ════ */}
-        {tab==='alerts' && (
+        {/* ═══ ALERTS ═══ */}
+        {tab==='alerts'&&(
           <Card>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20 }}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:20}}>
               <div>
                 <SectionTitle>Alert History · MQ6</SectionTitle>
-                <div style={{ fontFamily:'var(--font-mono)', fontSize:12, color:'var(--text-3)' }}>{nonSafeAlerts.length} leak event{nonSafeAlerts.length!==1?'s':''} recorded</div>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--text-3)'}}>{nonSafeAlerts.length} leak event{nonSafeAlerts.length!==1?'s':''} recorded</div>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-3)',marginTop:4}}>Only readings ≥ {LPG_PPM_THRESHOLD} ppm are logged</div>
               </div>
-              <button onClick={()=>setAlerts([])} style={{ padding:'6px 14px', borderRadius:8, fontSize:12, fontWeight:600, background:'var(--surface2)', border:'1px solid var(--border)', color:'var(--text-2)', fontFamily:'var(--font-body)' }}>Clear All</button>
+              <button onClick={()=>setAlerts([])} style={{padding:'6px 14px',borderRadius:8,fontSize:12,fontWeight:600,background:'var(--surface2)',border:'1px solid var(--border)',color:'var(--text-2)',fontFamily:'var(--font-body)',cursor:'pointer'}}>Clear All</button>
             </div>
-            {nonSafeAlerts.length===0 && (
-              <div style={{ textAlign:'center', padding:'48px 20px', color:'var(--text-3)' }}>
-                <div style={{ fontSize:36, marginBottom:10 }}>🛡️</div>
-                <div style={{ fontFamily:'var(--font-body)', fontSize:14 }}>No leakage events recorded</div>
-                <div style={{ fontFamily:'var(--font-mono)', fontSize:11, marginTop:4 }}>All MQ6 readings are safe</div>
+            {nonSafeAlerts.length===0&&(
+              <div style={{textAlign:'center',padding:'48px 20px',color:'var(--text-3)'}}>
+                <div style={{fontSize:36,marginBottom:10}}>🛡️</div>
+                <div style={{fontFamily:'var(--font-body)',fontSize:14}}>No leakage events recorded</div>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:11,marginTop:4}}>All MQ6 readings are below detection threshold ({LPG_PPM_THRESHOLD} ppm)</div>
               </div>
             )}
-            {nonSafeAlerts.map(a=>{ const ac=C[a.severity]; return (
-              <div key={a.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'14px 16px', borderRadius:'var(--r-sm)', marginBottom:8, background:ac.dim, border:`1px solid ${ac.border}` }}>
-                <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                  <span style={{ fontSize:20 }}>{a.severity==='high'?'🚨':'⚠️'}</span>
+            {nonSafeAlerts.map(a=>{const ac=C[a.severity];return(
+              <div key={a.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 16px',borderRadius:'var(--r-sm)',marginBottom:8,background:ac.dim,border:`1px solid ${ac.border}`}}>
+                <div style={{display:'flex',alignItems:'center',gap:12}}>
+                  <span style={{fontSize:20}}>{a.severity==='high'?'🚨':'⚠️'}</span>
                   <div>
-                    <div style={{ fontFamily:'var(--font-body)', fontSize:13, fontWeight:600, color:ac.main }}>{a.msg}</div>
-                    <div style={{ fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-3)', marginTop:3, display:'flex', gap:10, flexWrap:'wrap' }}>
+                    <div style={{fontFamily:'var(--font-body)',fontSize:13,fontWeight:600,color:ac.main}}>{a.msg}</div>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-3)',marginTop:3,display:'flex',gap:10,flexWrap:'wrap'}}>
                       <span>{a.date} · {a.time}</span>
-                      {a.ppm!=null && <span style={{ color:ac.main }}>~{Math.round(a.ppm)} ppm</span>}
-                      {a.raw!=null && <span>raw ADC: {a.raw}</span>}
+                      {a.ppm!=null&&<span style={{color:ac.main}}>~{Math.round(a.ppm)} ppm</span>}
+                      {a.raw!=null&&<span>raw ADC: {a.raw}</span>}
                     </div>
                   </div>
                 </div>
-                <Chip label={a.severity.toUpperCase()} color={ac.main} border={ac.border} bg={ac.dim} />
+                <Chip label={a.severity.toUpperCase()} color={ac.main} border={ac.border} bg={ac.dim}/>
               </div>
             )})}
           </Card>
         )}
 
-        {/* ════ ANALYTICS ════ */}
-        {tab==='analytics' && (
+        {/* ═══ ANALYTICS ═══ */}
+        {tab==='analytics'&&(
           <>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(155px,1fr))', gap:12, marginBottom:16 }}>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(155px,1fr))',gap:12,marginBottom:16}}>
               {[
-                { label:'Avg Daily Use',    val:'~2.1%',                                   col:'#4d8eff' },
-                { label:'Days Remaining',   val:`~${estDays}d`,                            col:'#00e5a0' },
-                { label:'Avg PPM (7d)',      val:avgPpm7d!=null?`${avgPpm7d} ppm`:'—',     col:'#ffb020' },
-                { label:'Peak PPM (7d)',     val:maxPpm7d!=null?`${maxPpm7d} ppm`:'—',     col:'#ff4560' },
-                { label:'High Leaks (7d)',   val:highLeaks7d,                              col:'#ff4560' },
-                { label:'Low Leaks (7d)',    val:lowLeaks7d,                               col:'#ffb020' },
+                {label:'Avg Daily Use',  val:'~2.1%',                                   col:'#4d8eff'},
+                {label:'Days Remaining', val:`~${estDays}d`,                            col:'#00e5a0'},
+                {label:'Avg PPM (7d)',   val:avgPpm7d!=null?`${avgPpm7d} ppm`:'0 ppm', col:'#ffb020'},
+                {label:'Peak PPM (7d)', val:maxPpm7d!=null?`${maxPpm7d} ppm`:'0 ppm', col:'#ff4560'},
+                {label:'High Leaks (7d)',val:highLeaks7d,                               col:'#ff4560'},
+                {label:'Low Leaks (7d)', val:lowLeaks7d,                                col:'#ffb020'},
               ].map((s,i)=>(
-                <Card key={i} accent={s.col} style={{ textAlign:'center', padding:'18px 12px' }}>
-                  <div style={{ fontFamily:'var(--font-disp)', fontSize:28, fontWeight:800, color:s.col, lineHeight:1 }}>{s.val}</div>
-                  <div style={{ fontFamily:'var(--font-mono)', fontSize:9, color:'var(--text-3)', marginTop:8, letterSpacing:'0.06em', textTransform:'uppercase' }}>{s.label}</div>
+                <Card key={i} accent={s.col} style={{textAlign:'center',padding:'18px 12px'}}>
+                  <div style={{fontFamily:'var(--font-disp)',fontSize:28,fontWeight:800,color:s.col,lineHeight:1}}>{s.val}</div>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text-3)',marginTop:8,letterSpacing:'0.06em',textTransform:'uppercase'}}>{s.label}</div>
                 </Card>
               ))}
             </div>
-
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(270px,1fr))', gap:16, marginBottom:16 }}>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(270px,1fr))',gap:16,marginBottom:16}}>
               <Card>
                 <SectionTitle>Weekly Gas Usage (avg %)</SectionTitle>
-                <BarChart data={weeklyUsage} color="#4d8eff" />
-                <div style={{ marginTop:10, fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-3)' }}>Est. {estDays} days remaining</div>
+                <BarChart data={weeklyUsage} color="#4d8eff"/>
+                <div style={{marginTop:10,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-3)'}}>Load cell · {cylinderPreset.label} cylinder · ~{estDays} days remaining</div>
               </Card>
               <Card>
                 <SectionTitle>Weekly Leak Events · MQ6</SectionTitle>
-                <DualBarChart data={weeklyLeaksBySev} />
-                <div style={{ display:'flex', gap:16, marginTop:10 }}>
-                  <span style={{ fontFamily:'var(--font-mono)', fontSize:10, color:'#ff4560' }}>■ High: {highLeaks7d}</span>
-                  <span style={{ fontFamily:'var(--font-mono)', fontSize:10, color:'#ffb020' }}>■ Low: {lowLeaks7d}</span>
+                <DualBarChart data={weeklyLeaksBySev}/>
+                <div style={{display:'flex',gap:16,marginTop:10}}>
+                  <span style={{fontFamily:'var(--font-mono)',fontSize:10,color:'#ff4560'}}>■ High: {highLeaks7d}</span>
+                  <span style={{fontFamily:'var(--font-mono)',fontSize:10,color:'#ffb020'}}>■ Low: {lowLeaks7d}</span>
                 </div>
               </Card>
             </div>
-
-            <Card style={{ marginBottom:16 }}>
-              <SectionTitle>Weekly Average MQ6 PPM</SectionTitle>
-              <BarChart data={weeklyPpm} color="#ffb020" />
-              <div style={{ display:'flex', justifyContent:'space-between', marginTop:10, fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-3)' }}>
-                <span>7d avg: {avgPpm7d!=null?`${avgPpm7d} ppm`:'—'}</span>
-                <span style={{ color:maxPpm7d>500?'#ff4560':maxPpm7d>200?'#ffb020':'var(--text-3)' }}>peak: {maxPpm7d!=null?`${maxPpm7d} ppm`:'—'}</span>
+            <Card style={{marginBottom:16}}>
+              <SectionTitle>Weekly Average MQ6 PPM (≥{LPG_PPM_THRESHOLD} ppm only)</SectionTitle>
+              <BarChart data={weeklyPpm} color="#ffb020"/>
+              <div style={{display:'flex',justifyContent:'space-between',marginTop:10,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-3)'}}>
+                <span>7d avg: {avgPpm7d!=null?`${avgPpm7d} ppm`:'0 ppm'}</span>
+                <span style={{color:maxPpm7d>500?'#ff4560':maxPpm7d>300?'#ffb020':'var(--text-3)'}}>peak: {maxPpm7d!=null?`${maxPpm7d} ppm`:'0 ppm'}</span>
               </div>
             </Card>
-
             <Card>
               <SectionTitle>Gas Level Trend (Last {Math.min(levelHistory.length,60)} Readings)</SectionTitle>
-              <div style={{ height:80 }}><Sparkline data={levelHistory} color="#4d8eff" height={80} /></div>
-              <div style={{ display:'flex', justifyContent:'space-between', marginTop:6, fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-3)' }}>
-                <span>oldest</span><span>current: {Math.round(gasLevel)}%</span>
+              <div style={{height:80}}><Sparkline data={levelHistory} color="#4d8eff" height={80}/></div>
+              <div style={{display:'flex',justifyContent:'space-between',marginTop:6,fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-3)'}}>
+                <span>oldest</span>
+                <span>current: {Math.round(gasLevel)}%{rawWeightG!=null?` (${(rawWeightG/1000).toFixed(2)} kg)`:''}</span>
               </div>
             </Card>
           </>
         )}
 
-        {/* ════ DEVICE ════ */}
-        {tab==='device' && (
+        {/* ═══ DEVICE ═══ */}
+        {tab==='device'&&(
           <>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))', gap:16, marginBottom:16 }}>
+            <Card style={{marginBottom:16}}>
+              <CylinderSelector selectedId={cylinderId} onChange={setCylinderId}/>
+            </Card>
+
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:16,marginBottom:16}}>
               <Card accent="#4d8eff">
                 <SectionTitle>ESP32 Status</SectionTitle>
                 {[
-                  { k:'Connection',  v:connected?'Online':demoMode?'Demo Mode':'Offline', col:connected?'#00e5a0':demoMode?'#ffb020':'#ff4560' },
-                  { k:'Last Data',   v:lastSeen.toLocaleTimeString(), col:null },
-                  { k:'Protocol',    v:'HTTP POST → Supabase', col:null },
-                  { k:'Send Rate',   v:'Every 5 seconds', col:null },
-                  { k:'Firmware',    v:'GasWatch v2.1.0', col:'#4d8eff' },
-                  { k:'Data Tables', v:'gas_levels · gas_leakages', col:null },
+                  {k:'Connection', v:connected?'Online':demoMode?'Demo Mode':'Offline',col:connected?'#00e5a0':demoMode?'#ffb020':'#ff4560'},
+                  {k:'Last Data',  v:lastSeen.toLocaleTimeString(),col:null},
+                  {k:'Protocol',   v:'HTTP POST → Supabase',col:null},
+                  {k:'Send Rate',  v:'Every 5 seconds',col:null},
+                  {k:'Firmware',   v:'GasWatch v2.2.0',col:'#4d8eff'},
+                  {k:'Data Tables',v:'gas_levels · gas_leakages',col:null},
                 ].map((r,i,arr)=>(
-                  <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 0', borderBottom:i<arr.length-1?'1px solid var(--border)':'none' }}>
-                    <span style={{ fontFamily:'var(--font-body)', fontSize:13, color:'var(--text-3)' }}>{r.k}</span>
-                    <span style={{ fontFamily:'var(--font-mono)', fontSize:12, color:r.col||'var(--text-2)' }}>{r.v}</span>
+                  <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:i<arr.length-1?'1px solid var(--border)':'none'}}>
+                    <span style={{fontFamily:'var(--font-body)',fontSize:13,color:'var(--text-3)'}}>{r.k}</span>
+                    <span style={{fontFamily:'var(--font-mono)',fontSize:12,color:r.col||'var(--text-2)'}}>{r.v}</span>
                   </div>
                 ))}
               </Card>
@@ -584,36 +704,35 @@ export default function App() {
               <Card>
                 <SectionTitle>Sensor Health</SectionTitle>
                 {[
-                  { name:'MQ6 Gas Sensor',     type:'Leakage · severity, ppm_approx, raw_value', health:connected?98:0,  col:'#00e5a0' },
-                  { name:'DYP-L06 Ultrasonic', type:'Gas Level · level_percent via UART Modbus', health:connected?100:0, col:'#4d8eff' },
+                  {name:'MQ6 Gas Sensor',  type:'Leakage · severity, ppm_approx (threshold: 300 ppm)', health:connected?98:0,  col:'#00e5a0'},
+                  {name:'HX711 Load Cell', type:'Gas Weight · weight_grams via SPI',                    health:connected?100:0, col:'#4d8eff'},
                 ].map((s,i)=>(
-                  <div key={i} style={{ padding:'14px', background:'var(--surface2)', borderRadius:'var(--r-sm)', border:'1px solid var(--border)', marginBottom:10 }}>
-                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+                  <div key={i} style={{padding:'14px',background:'var(--surface2)',borderRadius:'var(--r-sm)',border:'1px solid var(--border)',marginBottom:10}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
                       <div>
-                        <div style={{ fontFamily:'var(--font-body)', fontSize:13, fontWeight:600, color:'var(--text-1)' }}>{s.name}</div>
-                        <div style={{ fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-3)', marginTop:2 }}>{s.type}</div>
+                        <div style={{fontFamily:'var(--font-body)',fontSize:13,fontWeight:600,color:'var(--text-1)'}}>{s.name}</div>
+                        <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-3)',marginTop:2}}>{s.type}</div>
                       </div>
-                      <Chip label={connected?'ACTIVE':'OFFLINE'} color={connected?'#00e5a0':'#ff4560'} />
+                      <Chip label={connected?'ACTIVE':'OFFLINE'} color={connected?'#00e5a0':'#ff4560'}/>
                     </div>
-                    <div style={{ background:'var(--surface3)', borderRadius:4, height:5, overflow:'hidden' }}>
-                      <div style={{ width:`${s.health}%`, height:'100%', background:s.col, borderRadius:4, boxShadow:`0 0 8px ${s.col}80`, transition:'width 1s ease' }} />
+                    <div style={{background:'var(--surface3)',borderRadius:4,height:5,overflow:'hidden'}}>
+                      <div style={{width:`${s.health}%`,height:'100%',background:s.col,borderRadius:4,transition:'width 1s ease'}}/>
                     </div>
-                    <div style={{ fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-3)', textAlign:'right', marginTop:4 }}>{s.health}% health</div>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-3)',textAlign:'right',marginTop:4}}>{s.health}% health</div>
                   </div>
                 ))}
-                {/* Live MQ6 summary panel */}
-                <div style={{ padding:'14px', background:'var(--surface2)', borderRadius:'var(--r-sm)', border:`1px solid ${sCol.border}` }}>
-                  <div style={{ fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-3)', marginBottom:8, letterSpacing:'0.08em', textTransform:'uppercase' }}>Live MQ6 Readings</div>
+                <div style={{padding:'14px',background:'var(--surface2)',borderRadius:'var(--r-sm)',border:`1px solid ${sCol.border}`}}>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-3)',marginBottom:8,letterSpacing:'0.08em',textTransform:'uppercase'}}>Live MQ6 Readings</div>
                   {[
-                    { k:'Severity',    v:severity.toUpperCase(),                                          col:sCol.main },
-                    { k:'PPM (approx)',v:currentPpm!=null?`~${Math.round(currentPpm)} ppm`:'—',           col:sCol.main },
-                    { k:'Raw ADC',     v:currentRaw!=null?currentRaw:'—',                                 col:'var(--text-2)' },
-                    { k:'7d Avg PPM',  v:avgPpm7d!=null?`${avgPpm7d} ppm`:'—',                           col:'var(--text-2)' },
-                    { k:'7d Peak PPM', v:maxPpm7d!=null?`${maxPpm7d} ppm`:'—',                           col:maxPpm7d>500?'#ff4560':maxPpm7d>200?'#ffb020':'var(--text-2)' },
+                    {k:'Severity',   v:cookingMode?'PAUSED':displaySev.toUpperCase(),                     col:cookingMode?'#ffb020':sCol.main},
+                    {k:'PPM (≥300)', v:displayPpm!=null?`~${Math.round(displayPpm)} ppm`:'0 ppm',          col:displayPpm?sCol.main:'var(--text-3)'},
+                    {k:'Raw ADC',    v:currentRaw!=null?currentRaw:'—',                                    col:'var(--text-2)'},
+                    {k:'7d Avg PPM', v:avgPpm7d!=null?`${avgPpm7d} ppm`:'0 ppm',                          col:'var(--text-2)'},
+                    {k:'7d Peak',    v:maxPpm7d!=null?`${maxPpm7d} ppm`:'0 ppm',                          col:maxPpm7d>500?'#ff4560':maxPpm7d>300?'#ffb020':'var(--text-2)'},
                   ].map((r,i,arr)=>(
-                    <div key={i} style={{ display:'flex', justifyContent:'space-between', padding:'7px 0', borderBottom:i<arr.length-1?'1px solid var(--border)':'none' }}>
-                      <span style={{ fontFamily:'var(--font-body)', fontSize:12, color:'var(--text-3)' }}>{r.k}</span>
-                      <span style={{ fontFamily:'var(--font-mono)', fontSize:12, color:r.col }}>{r.v}</span>
+                    <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'7px 0',borderBottom:i<arr.length-1?'1px solid var(--border)':'none'}}>
+                      <span style={{fontFamily:'var(--font-body)',fontSize:12,color:'var(--text-3)'}}>{r.k}</span>
+                      <span style={{fontFamily:'var(--font-mono)',fontSize:12,color:r.col}}>{r.v}</span>
                     </div>
                   ))}
                 </div>
@@ -622,18 +741,18 @@ export default function App() {
 
             <Card>
               <SectionTitle>Integration Setup</SectionTitle>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:10 }}>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:10}}>
                 {[
-                  { icon:'🔗', title:'ESP32 WiFi',   desc:'Set WIFI_SSID + WIFI_PASSWORD in firmware. ESP32 connects to your local network.' },
-                  { icon:'🗄️', title:'Supabase',     desc:'Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Netlify environment variables.' },
-                  { icon:'📊', title:'MQ6 Table',    desc:'ESP32 POSTs severity, raw_value, and ppm_approx to gas_leakages every 5 seconds.' },
-                  { icon:'📡', title:'Realtime',      desc:'Enable Realtime on gas_levels and gas_leakages in Supabase → Database → Replication.' },
+                  {icon:'🔗',title:'ESP32 WiFi',     desc:'Set WIFI_SSID + WIFI_PASSWORD in firmware. ESP32 connects to your local network.'},
+                  {icon:'⚖️',title:'HX711 Load Cell',desc:'ESP32 posts weight_grams to gas_levels every 5s. Level % is calculated in the app using your cylinder selection.'},
+                  {icon:'📊',title:'MQ6 Table',      desc:'ESP32 POSTs severity, raw_value, and ppm_approx. App shows 0 ppm below 300 ppm threshold to suppress false readings.'},
+                  {icon:'📡',title:'Realtime',        desc:'Enable Realtime on gas_levels and gas_leakages in Supabase → Database → Replication.'},
                 ].map((c,i)=>(
-                  <div key={i} style={{ padding:'14px', background:'var(--surface2)', borderRadius:'var(--r-sm)', border:'1px solid var(--border)', display:'flex', gap:12 }}>
-                    <span style={{ fontSize:20, flexShrink:0 }}>{c.icon}</span>
+                  <div key={i} style={{padding:'14px',background:'var(--surface2)',borderRadius:'var(--r-sm)',border:'1px solid var(--border)',display:'flex',gap:12}}>
+                    <span style={{fontSize:20,flexShrink:0}}>{c.icon}</span>
                     <div>
-                      <div style={{ fontFamily:'var(--font-body)', fontSize:13, fontWeight:600, marginBottom:4 }}>{c.title}</div>
-                      <div style={{ fontFamily:'var(--font-body)', fontSize:12, color:'var(--text-3)', lineHeight:1.5 }}>{c.desc}</div>
+                      <div style={{fontFamily:'var(--font-body)',fontSize:13,fontWeight:600,marginBottom:4}}>{c.title}</div>
+                      <div style={{fontFamily:'var(--font-body)',fontSize:12,color:'var(--text-3)',lineHeight:1.5}}>{c.desc}</div>
                     </div>
                   </div>
                 ))}
@@ -644,12 +763,12 @@ export default function App() {
       </main>
 
       {/* MOBILE NAV */}
-      <div style={{ display:'none', position:'fixed', bottom:0, left:0, right:0, background:'rgba(10,14,26,0.95)', backdropFilter:'blur(16px)', borderTop:'1px solid var(--border)', padding:'6px 0 max(6px,env(safe-area-inset-bottom))', zIndex:200 }} id="mobile-nav">
+      <div style={{display:'none',position:'fixed',bottom:0,left:0,right:0,background:'rgba(10,14,26,0.95)',backdropFilter:'blur(16px)',borderTop:'1px solid var(--border)',padding:'6px 0 max(6px,env(safe-area-inset-bottom))',zIndex:200}} id="mobile-nav">
         {navItems.map(n=>(
-          <button key={n.id} onClick={()=>setTab(n.id)} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:3, padding:'6px 4px', position:'relative', color:tab===n.id?'#f0f4ff':'var(--text-3)' }}>
-            <span style={{ fontSize:18 }}>{n.icon}</span>
-            <span style={{ fontFamily:'var(--font-mono)', fontSize:9, fontWeight:500, letterSpacing:'0.06em' }}>{n.label}</span>
-            {n.badge>0 && <span style={{ position:'absolute', top:2, right:'18%', background:'#ff4560', color:'#fff', fontSize:8, fontWeight:700, borderRadius:8, padding:'0 4px', fontFamily:'var(--font-mono)' }}>{n.badge}</span>}
+          <button key={n.id} onClick={()=>setTab(n.id)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3,padding:'6px 4px',position:'relative',color:tab===n.id?'#f0f4ff':'var(--text-3)'}}>
+            <span style={{fontSize:18}}>{n.icon}</span>
+            <span style={{fontFamily:'var(--font-mono)',fontSize:9,fontWeight:500,letterSpacing:'0.06em'}}>{n.label}</span>
+            {n.badge>0&&<span style={{position:'absolute',top:2,right:'18%',background:'#ff4560',color:'#fff',fontSize:8,fontWeight:700,borderRadius:8,padding:'0 4px',fontFamily:'var(--font-mono)'}}>{n.badge}</span>}
           </button>
         ))}
       </div>
