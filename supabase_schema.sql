@@ -105,3 +105,37 @@ order by day;
 --   delete from gas_leakages where created_at < now() - interval '90 days';
 -- end;
 -- $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- GasWatch Pro — Migration: DYP-L06 → HX711 Load Cell
+-- Run this in: Supabase Dashboard → SQL Editor → New Query
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Step 1: Add the new weight_grams column (ESP32 is already sending this)
+alter table gas_levels
+  add column if not exists weight_grams float;
+
+-- Step 2: Drop the old sensor columns that no longer apply
+alter table gas_levels
+  drop column if exists level_percent,
+  drop column if exists raw_distance_mm;
+
+-- Step 3: Add a not-null constraint now that old rows are gone (optional)
+-- alter table gas_levels alter column weight_grams set not null;
+
+-- Step 4: Update the daily_gas_usage analytics view to use weight_grams
+-- (level_percent is now computed in the app, not stored)
+drop view if exists daily_gas_usage;
+
+create or replace view daily_gas_usage as
+select
+  date_trunc('day', created_at at time zone 'UTC') as day,
+  round(avg(weight_grams)::numeric, 1)             as avg_weight_g,
+  round(min(weight_grams)::numeric, 1)             as min_weight_g,
+  round(max(weight_grams)::numeric, 1)             as max_weight_g,
+  count(*)                                         as reading_count
+from gas_levels
+where created_at >= now() - interval '30 days'
+group by day
+order by day;
+
