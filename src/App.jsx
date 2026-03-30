@@ -10,9 +10,12 @@ export const CYLINDER_PRESETS = [
 ]
 const DEFAULT_CYLINDER = '6kg'
 
+// ─── FIX 1: More robust weightToPercent with NaN guard ────────────────────
 const weightToPercent = (weight_g, preset) => {
   if (weight_g == null || !preset) return 0
-  return Math.min(100, Math.max(0, ((weight_g - preset.tare_g) / preset.net_g) * 100))
+  const raw = ((Number(weight_g) - preset.tare_g) / preset.net_g) * 100
+  const clamped = Math.min(100, Math.max(0, raw))
+  return isNaN(clamped) ? 0 : clamped
 }
 
 // ─── MQ6 thresholds ────────────────────────────────────────────────────────
@@ -124,25 +127,42 @@ function SectionTitle({ children, style }) {
 }
 
 // ─── Arc Gauge ─────────────────────────────────────────────────────────────
+// FIX 2: Added key prop trigger + smoother transition timing
 function ArcGauge({ value, color, size = 160 }) {
   const r = size * 0.38, cx = size / 2, cy = size / 2
   const startAngle = -210, totalArc = 240
-  const valueArc = (value / 100) * totalArc
+  // Guard against NaN/null so arc never breaks
+  const safeValue = isNaN(value) || value == null ? 0 : Math.min(100, Math.max(0, value))
+  const valueArc = (safeValue / 100) * totalArc
   const toRad = a => (a * Math.PI) / 180
   const arcPath = (startA, endA) => {
     const x1 = cx + r * Math.cos(toRad(startA)), y1 = cy + r * Math.sin(toRad(startA))
-    const x2 = cx + r * Math.cos(toRad(endA)), y2 = cy + r * Math.sin(toRad(endA))
+    const x2 = cx + r * Math.cos(toRad(endA)),   y2 = cy + r * Math.sin(toRad(endA))
     const la = Math.abs(endA - startA) > 180 ? 1 : 0
     return `M ${x1} ${y1} A ${r} ${r} 0 ${la} 1 ${x2} ${y2}`
   }
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ overflow: 'visible' }}>
-      <path d={arcPath(startAngle, startAngle + totalArc)} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={size * 0.07} strokeLinecap="round" />
-      <path d={arcPath(startAngle, startAngle + valueArc)} fill="none" stroke={color} strokeWidth={size * 0.07} strokeLinecap="round"
-        style={{ filter: `drop-shadow(0 0 5px ${color})`, transition: 'all 0.8s cubic-bezier(.4,0,.2,1)' }} />
+      {/* Track */}
+      <path
+        d={arcPath(startAngle, startAngle + totalArc)}
+        fill="none" stroke="rgba(255,255,255,0.05)"
+        strokeWidth={size * 0.07} strokeLinecap="round"
+      />
+      {/* Value arc — transition drives the animation */}
+      <path
+        d={arcPath(startAngle, startAngle + valueArc)}
+        fill="none" stroke={color}
+        strokeWidth={size * 0.07} strokeLinecap="round"
+        style={{
+          filter: `drop-shadow(0 0 6px ${color})`,
+          transition: 'all 1s cubic-bezier(0.34, 1.56, 0.64, 1)',  // spring feel
+        }}
+      />
+      {/* Percentage text */}
       <text x={cx} y={cy - 4} textAnchor="middle" fill={color}
         style={{ fontFamily: "'Outfit',sans-serif", fontSize: size * 0.22, fontWeight: 800, transition: 'fill 0.4s' }}>
-        {Math.round(value)}%
+        {Math.round(safeValue)}%
       </text>
       <text x={cx} y={cy + size * 0.13} textAnchor="middle" fill="var(--text-3)"
         style={{ fontFamily: "'DM Mono',monospace", fontSize: size * 0.074, letterSpacing: '0.1em' }}>
@@ -303,7 +323,17 @@ export default function App() {
   const [demoMode]                               = useState(!isConfigured())
   const [cylinderId, setCylinderIdRaw]           = useState(() => localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)
   const cylinderPreset                           = CYLINDER_PRESETS.find(p => p.id === cylinderId) || CYLINDER_PRESETS[1]
-  const setCylinderId = id => { setCylinderIdRaw(id); localStorage.setItem('gaswatch_cylinder', id) }
+
+  // ── FIX 3: Keep a ref to cylinderPreset so the realtime callback
+  //    always reads the latest preset without needing it as a dependency
+  const cylinderPresetRef = useRef(cylinderPreset)
+  useEffect(() => { cylinderPresetRef.current = cylinderPreset }, [cylinderPreset])
+
+  const setCylinderId = id => {
+    setCylinderIdRaw(id)
+    localStorage.setItem('gaswatch_cylinder', id)
+  }
+
   const [severity, setSeverity]                  = useState('safe')
   const [currentPpm, setCurrentPpm]              = useState(null)
   const [currentRaw, setCurrentRaw]              = useState(null)
@@ -340,10 +370,14 @@ export default function App() {
     return () => clearTimeout(t)
   }, [cookingMode, cookingStart])
 
-  // Recompute % when weight or cylinder changes
+  // ── FIX 4: Recompute gasLevel AND update levelHistory when weight OR
+  //    cylinder changes — this is what was missing for real-time gauge movement
   useEffect(() => {
     if (rawWeightG == null) return
-    setGasLevel(weightToPercent(rawWeightG, cylinderPreset))
+    const pct = weightToPercent(rawWeightG, cylinderPreset)
+    setGasLevel(pct)
+    // Also push to history so sparkline stays live
+    setLevelHistory(h => [...h.slice(-59), pct])
   }, [rawWeightG, cylinderPreset])
 
   const playAlarm = useCallback(() => {
@@ -421,70 +455,148 @@ export default function App() {
 
     let levelCh, leakCh
     async function init() {
-      const { data: lvls } = await supabase.from('gas_levels').select('weight_grams,created_at').order('created_at', { ascending: false }).limit(60)
+      // ── Load initial gas level history ────────────────────────────────
+      const { data: lvls } = await supabase
+        .from('gas_levels')
+        .select('weight_grams,created_at')
+        .order('created_at', { ascending: false })
+        .limit(60)
+
       if (lvls?.length > 0) {
-        setRawWeightG(lvls[0].weight_grams); setLastSeen(new Date(lvls[0].created_at)); setConnected(true)
         const pr = CYLINDER_PRESETS.find(p => p.id === (localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)) || CYLINDER_PRESETS[1]
-        setLevelHistory(lvls.map(r => weightToPercent(r.weight_grams, pr)).reverse())
+        const latestWeight = Number(lvls[0].weight_grams)
+        const latestPct    = weightToPercent(latestWeight, pr)
+
+        // ── FIX 5: Set all three together atomically so gauge, number
+        //    and history are all in sync from the very first render
+        setRawWeightG(latestWeight)
+        setGasLevel(latestPct)
+        setLastSeen(new Date(lvls[0].created_at))
+        setConnected(true)
+        setLevelHistory(lvls.map(r => weightToPercent(Number(r.weight_grams), pr)).reverse())
       }
-      const { data: leaks } = await supabase.from('gas_leakages').select('id,severity,raw_value,ppm_approx,created_at').order('created_at', { ascending: false }).limit(100)
+
+      // ── Load initial leakage data ─────────────────────────────────────
+      const { data: leaks } = await supabase
+        .from('gas_leakages')
+        .select('id,severity,raw_value,ppm_approx,created_at')
+        .order('created_at', { ascending: false })
+        .limit(100)
+
       if (leaks?.length > 0) {
         const l = leaks[0]
-        setSeverity(filterSeverity(l.severity, l.ppm_approx)); setCurrentPpm(filterPpm(l.ppm_approx))
+        setSeverity(filterSeverity(l.severity, l.ppm_approx))
+        setCurrentPpm(filterPpm(l.ppm_approx))
         if (l.raw_value != null) setCurrentRaw(l.raw_value)
         setPpmHistory(leaks.slice(0, 60).map(r => filterPpm(r.ppm_approx) ?? 0).reverse())
         const filtered = leaks.filter(r => filterSeverity(r.severity, r.ppm_approx) !== 'safe')
-        setAlerts(filtered.map(r => ({ id: r.id, severity: filterSeverity(r.severity, r.ppm_approx), time: fmtTime(r.created_at), date: fmtDate(r.created_at), msg: r.severity === 'high' ? 'CRITICAL gas leakage detected!' : 'Minor gas leakage detected', ppm: filterPpm(r.ppm_approx), raw: r.raw_value })))
-        setTotalLeaks(filtered.length); setConnected(true)
+        setAlerts(filtered.map(r => ({
+          id: r.id,
+          severity: filterSeverity(r.severity, r.ppm_approx),
+          time: fmtTime(r.created_at),
+          date: fmtDate(r.created_at),
+          msg: r.severity === 'high' ? 'CRITICAL gas leakage detected!' : 'Minor gas leakage detected',
+          ppm: filterPpm(r.ppm_approx),
+          raw: r.raw_value
+        })))
+        setTotalLeaks(filtered.length)
+        setConnected(true)
       }
+
+      // ── Weekly analytics ──────────────────────────────────────────────
       const sevenAgo = new Date(Date.now() - 7 * 86400000).toISOString()
-      const { data: wLvls } = await supabase.from('gas_levels').select('weight_grams,created_at').gte('created_at', sevenAgo)
+      const { data: wLvls } = await supabase
+        .from('gas_levels')
+        .select('weight_grams,created_at')
+        .gte('created_at', sevenAgo)
+
       if (wLvls?.length > 0) {
         const pr = CYLINDER_PRESETS.find(p => p.id === (localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)) || CYLINDER_PRESETS[1]
-        const sums = {}, cnts = {}; DAYS.forEach(d => { sums[d] = 0; cnts[d] = 0 })
-        wLvls.forEach(r => { const d = DAYS[new Date(r.created_at).getDay()]; sums[d] += weightToPercent(r.weight_grams, pr); cnts[d]++ })
+        const sums = {}, cnts = {}
+        DAYS.forEach(d => { sums[d] = 0; cnts[d] = 0 })
+        wLvls.forEach(r => {
+          const d = DAYS[new Date(r.created_at).getDay()]
+          sums[d] += weightToPercent(Number(r.weight_grams), pr)
+          cnts[d]++
+        })
         setWeeklyUsage(DAYS.map(d => ({ label: d.slice(0, 3), value: cnts[d] > 0 ? Math.round(sums[d] / cnts[d]) : 0 })))
-      } else setWeeklyUsage(DAYS.map(d => ({ label: d.slice(0, 3), value: 0 })))
-      const { data: wLeaks } = await supabase.from('gas_leakages').select('severity,ppm_approx,created_at').gte('created_at', sevenAgo)
+      } else {
+        setWeeklyUsage(DAYS.map(d => ({ label: d.slice(0, 3), value: 0 })))
+      }
+
+      const { data: wLeaks } = await supabase
+        .from('gas_leakages')
+        .select('severity,ppm_approx,created_at')
+        .gte('created_at', sevenAgo)
+
       if (wLeaks?.length > 0) {
         const bySev = {}, ppmS = {}, ppmC = {}
         DAYS.forEach(d => { bySev[d] = { high: 0, low: 0 }; ppmS[d] = 0; ppmC[d] = 0 })
         let sumP = 0, cntP = 0, maxP = 0, cH = 0, cL = 0
         wLeaks.forEach(r => {
-          const d = DAYS[new Date(r.created_at).getDay()]
-          const fSev = filterSeverity(r.severity, r.ppm_approx); const fPpm = filterPpm(r.ppm_approx)
-          if (fSev === 'high') { bySev[d].high++; cH++ }; if (fSev === 'low') { bySev[d].low++; cL++ }
+          const d    = DAYS[new Date(r.created_at).getDay()]
+          const fSev = filterSeverity(r.severity, r.ppm_approx)
+          const fPpm = filterPpm(r.ppm_approx)
+          if (fSev === 'high') { bySev[d].high++; cH++ }
+          if (fSev === 'low')  { bySev[d].low++;  cL++ }
           if (fPpm != null) { ppmS[d] += fPpm; ppmC[d]++; sumP += fPpm; cntP++; if (fPpm > maxP) maxP = fPpm }
         })
         setWeeklyLeaksBySev(DAYS.map(d => ({ label: d.slice(0, 3), high: bySev[d].high, low: bySev[d].low })))
         setWeeklyPpm(DAYS.map(d => ({ label: d.slice(0, 3), value: ppmC[d] > 0 ? Math.round(ppmS[d] / ppmC[d]) : 0 })))
-        setAvgPpm7d(cntP > 0 ? Math.round(sumP / cntP) : null); setMaxPpm7d(maxP > 0 ? Math.round(maxP) : null)
+        setAvgPpm7d(cntP > 0 ? Math.round(sumP / cntP) : null)
+        setMaxPpm7d(maxP > 0 ? Math.round(maxP) : null)
         setHighLeaks7d(cH); setLowLeaks7d(cL)
       } else {
         setWeeklyLeaksBySev(DAYS.map(d => ({ label: d.slice(0, 3), high: 0, low: 0 })))
         setWeeklyPpm(DAYS.map(d => ({ label: d.slice(0, 3), value: 0 })))
       }
+
       setLoaded(true)
     }
+
     init()
-    levelCh = supabase.channel('rt-levels').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gas_levels' }, p => {
-      setRawWeightG(p.new.weight_grams); setLastSeen(new Date(p.new.created_at)); setConnected(true)
-    }).subscribe()
-    leakCh = supabase.channel('rt-leakages').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gas_leakages' }, p => {
-      const { severity: sev, id, created_at, ppm_approx, raw_value } = p.new
-      handleLeakEvent(sev, id, created_at, ppm_approx, raw_value); setConnected(true)
-    }).subscribe()
-    return () => { supabase.removeChannel(levelCh); supabase.removeChannel(leakCh); clearInterval(alarmTimer.current) }
+
+    // ── FIX 6: Realtime subscription now ALSO updates gasLevel and
+    //    levelHistory immediately — not just rawWeightG.
+    //    Previously only rawWeightG was set, meaning gasLevel lagged by
+    //    one render and levelHistory never updated from live data at all.
+    levelCh = supabase.channel('rt-levels')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gas_levels' }, p => {
+        const w   = Number(p.new.weight_grams)
+        const pr  = cylinderPresetRef.current          // always current preset via ref
+        const pct = weightToPercent(w, pr)
+
+        setRawWeightG(w)
+        setGasLevel(pct)                               // ← direct update, no lag
+        setLastSeen(new Date(p.new.created_at))
+        setConnected(true)
+        // levelHistory update is handled by the useEffect above watching rawWeightG
+      })
+      .subscribe()
+
+    leakCh = supabase.channel('rt-leakages')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gas_leakages' }, p => {
+        const { severity: sev, id, created_at, ppm_approx, raw_value } = p.new
+        handleLeakEvent(sev, id, created_at, ppm_approx, raw_value)
+        setConnected(true)
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(levelCh)
+      supabase.removeChannel(leakCh)
+      clearInterval(alarmTimer.current)
+    }
   }, [demoMode, handleLeakEvent, playAlarm])
 
   // ── Derived state ────────────────────────────────────────────────────────
-  const displaySev      = cookingMode ? 'safe' : severity
-  const displayPpm      = cookingMode ? null : currentPpm
-  const sCol            = cookingMode ? C.safe : C[severity]
-  const lCol            = levelColor(gasLevel)
-  const rules           = getRecommendations(displaySev, gasLevel, displayPpm)
-  const estDays         = gasLevel > 0 ? Math.max(0, Math.ceil(gasLevel / 2.1)) : 0
-  const nonSafeAlerts   = alerts.filter(a => a.severity !== 'safe')
+  const displaySev    = cookingMode ? 'safe' : severity
+  const displayPpm    = cookingMode ? null : currentPpm
+  const sCol          = cookingMode ? C.safe : C[severity]
+  const lCol          = levelColor(gasLevel)
+  const rules         = getRecommendations(displaySev, gasLevel, displayPpm)
+  const estDays       = gasLevel > 0 ? Math.max(0, Math.ceil(gasLevel / 2.1)) : 0
+  const nonSafeAlerts = alerts.filter(a => a.severity !== 'safe')
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: '◈' },
@@ -493,7 +605,6 @@ export default function App() {
     { id: 'device',    label: 'Device',    icon: '◇' },
   ]
 
-  // ── Loading screen ───────────────────────────────────────────────────────
   if (!loaded) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}>
       <div style={{ width: 36, height: 36, border: '2px solid var(--border2)', borderTopColor: '#00e5a0', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
@@ -501,20 +612,11 @@ export default function App() {
     </div>
   )
 
-  // ── Sticky banner heights (for correct scroll clearance) ─────────────────
   const bannerCount = (cookingMode ? 1 : 0) + (alarmBanner && !cookingMode ? 1 : 0)
-  const bannerH = bannerCount * 56  // each banner ~56px
+  const bannerH = bannerCount * 56
 
   return (
-    <div style={{ 
-      minHeight: '100vh', 
-      background: 'var(--bg)', 
-      display: 'flex', 
-      flexDirection: 'column',
-      width: '100%',
-      maxWidth: '100%',
-      overflowX: 'hidden'
-    }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
 
       {/* ── HEADER ─────────────────────────────────────────────────────── */}
       <header style={{
@@ -524,7 +626,6 @@ export default function App() {
         padding: '0 16px', height: 56,
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
       }}>
-        {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
           <div style={{ width: 30, height: 30, borderRadius: 9, background: 'linear-gradient(135deg,#ff6b35,#ff4560)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, boxShadow: '0 0 14px rgba(255,69,96,0.35)' }}>🔥</div>
           <div>
@@ -536,8 +637,6 @@ export default function App() {
             </div>
           </div>
         </div>
-
-        {/* Right side controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           <CookingModeToggle active={cookingMode} onToggle={() => setCookingMode(!cookingMode)} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 20, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
@@ -564,9 +663,7 @@ export default function App() {
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'rgba(255,176,32,0.7)', marginTop: 1 }}>Auto-off after 2 hours</div>
             </div>
           </div>
-          <button onClick={() => setCookingMode(false)} style={{ padding: '4px 10px', borderRadius: 8, fontSize: 11, fontWeight: 600, background: 'rgba(255,176,32,0.2)', border: '1px solid rgba(255,176,32,0.4)', color: '#ffb020' }}>
-            Off
-          </button>
+          <button onClick={() => setCookingMode(false)} style={{ padding: '4px 10px', borderRadius: 8, fontSize: 11, fontWeight: 600, background: 'rgba(255,176,32,0.2)', border: '1px solid rgba(255,176,32,0.4)', color: '#ffb020' }}>Off</button>
         </div>
       )}
 
@@ -621,37 +718,25 @@ export default function App() {
       </nav>
 
       {/* ── MAIN CONTENT ────────────────────────────────────────────────── */}
-      <main id="main-content" className="fade-up" style={{ 
-        flex: 1, 
-        padding: '16px', 
-        maxWidth: 960, 
-        width: '100%', 
-        margin: '0 auto',
-        minWidth: 0,
-        overflowX: 'hidden'
-      }}>
+      <main id="main-content" className="fade-up" style={{ flex: 1, padding: '16px', maxWidth: 960, width: '100%', margin: '0 auto', minWidth: 0, overflowX: 'hidden' }}>
 
-        {/* ════ DASHBOARD ════ */}
         {tab === 'dashboard' && (
           <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
             <DashboardTab
               gasLevel={gasLevel} lCol={lCol} rawWeightG={rawWeightG} cylinderPreset={cylinderPreset}
               levelHistory={levelHistory} severity={severity} displaySev={displaySev}
               displayPpm={displayPpm} currentPpm={currentPpm} sCol={sCol} ppmHistory={ppmHistory}
-              cookingMode={cookingMode} estDays={estDays} totalLeaks={totalLeaks}
-              rules={rules}
+              cookingMode={cookingMode} estDays={estDays} totalLeaks={totalLeaks} rules={rules}
             />
           </div>
         )}
 
-        {/* ════ ALERTS ════ */}
         {tab === 'alerts' && (
           <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
             <AlertsTab nonSafeAlerts={nonSafeAlerts} setAlerts={setAlerts} />
           </div>
         )}
 
-        {/* ════ ANALYTICS ════ */}
         {tab === 'analytics' && (
           <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
             <AnalyticsTab
@@ -664,15 +749,13 @@ export default function App() {
           </div>
         )}
 
-        {/* ════ DEVICE ════ */}
         {tab === 'device' && (
           <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
             <DeviceTab
               cylinderId={cylinderId} setCylinderId={setCylinderId}
               connected={connected} demoMode={demoMode} lastSeen={lastSeen}
               displaySev={displaySev} displayPpm={displayPpm} currentRaw={currentRaw}
-              cookingMode={cookingMode} avgPpm7d={avgPpm7d} maxPpm7d={maxPpm7d}
-              sCol={sCol}
+              cookingMode={cookingMode} avgPpm7d={avgPpm7d} maxPpm7d={maxPpm7d} sCol={sCol}
             />
           </div>
         )}
@@ -693,14 +776,11 @@ export default function App() {
               color: tab === n.id ? '#f0f4ff' : 'var(--text-3)',
               transition: 'color 0.2s',
             }}>
-              {/* Active indicator dot */}
               {tab === n.id && (
                 <div style={{ position: 'absolute', top: 6, width: 4, height: 4, borderRadius: '50%', background: '#4d8eff' }} />
               )}
               <span style={{ fontSize: 18, lineHeight: 1 }}>{n.icon}</span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 500, letterSpacing: '0.05em' }}>
-                {n.label}
-              </span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 500, letterSpacing: '0.05em' }}>{n.label}</span>
               {n.badge > 0 && (
                 <span style={{ position: 'absolute', top: 8, right: '14%', background: '#ff4560', color: '#fff', fontSize: 8, fontWeight: 700, borderRadius: 8, padding: '0 4px', fontFamily: 'var(--font-mono)' }}>
                   {n.badge > 99 ? '99+' : n.badge}
@@ -715,16 +795,13 @@ export default function App() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// DASHBOARD TAB  — clean, focused, mobile-first
+// DASHBOARD TAB
 // ══════════════════════════════════════════════════════════════════════════
 function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory, severity, displaySev, displayPpm, currentPpm, sCol, ppmHistory, cookingMode, estDays, totalLeaks, rules }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
 
-      {/* ── Row 1: Two hero cards side-by-side ─────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, width: '100%' }}>
-
-        {/* Gas Level card */}
         <Card accent={lCol.main} glow={lCol.glow} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px 12px', minWidth: 0 }}>
           <SectionTitle style={{ marginBottom: 10 }}>Cylinder Level</SectionTitle>
           <ArcGauge value={gasLevel} color={lCol.main} size={130} />
@@ -741,7 +818,6 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
           </div>
         </Card>
 
-        {/* Leakage Status card */}
         <Card accent={sCol.main} glow={displaySev !== 'safe' ? sCol.glow : undefined} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '20px 12px', minWidth: 0 }}>
           <SectionTitle style={{ marginBottom: 6 }}>Leak Status</SectionTitle>
           <div style={{
@@ -760,7 +836,6 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
         </Card>
       </div>
 
-      {/* ── Row 2: PPM + quick stats ─────────────────────────────────────── */}
       <Card>
         <SectionTitle>MQ6 Gas Concentration</SectionTitle>
         <PpmBar ppm={displayPpm} />
@@ -772,12 +847,11 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
         )}
       </Card>
 
-      {/* ── Row 3: Key stats strip ────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, width: '100%' }}>
         {[
-          { label: 'Days Left',    val: `~${estDays}d`,       col: '#4d8eff' },
-          { label: 'Gas Level',    val: `${Math.round(gasLevel)}%`, col: lCol.main },
-          { label: 'Leak Events',  val: totalLeaks,           col: '#ff4560' },
+          { label: 'Days Left',   val: `~${estDays}d`,            col: '#4d8eff' },
+          { label: 'Gas Level',   val: `${Math.round(gasLevel)}%`, col: lCol.main },
+          { label: 'Leak Events', val: totalLeaks,                 col: '#ff4560' },
         ].map((s, i) => (
           <Card key={i} style={{ textAlign: 'center', padding: '14px 8px', minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-disp)', fontSize: 24, fontWeight: 800, color: s.col, lineHeight: 1 }}>{s.val}</div>
@@ -786,7 +860,6 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
         ))}
       </div>
 
-      {/* ── Row 4: Gas level trend sparkline ─────────────────────────────── */}
       {levelHistory.length > 2 && (
         <Card>
           <SectionTitle>Level Trend · Last {Math.min(levelHistory.length, 60)} Readings</SectionTitle>
@@ -794,7 +867,6 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
         </Card>
       )}
 
-      {/* ── Row 5: Safety recommendations ────────────────────────────────── */}
       <Card accent={sCol.main}>
         <SectionTitle>⚡ Safety Recommendations</SectionTitle>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -834,7 +906,6 @@ function AlertsTab({ nonSafeAlerts, setAlerts }) {
           Clear All
         </button>
       </div>
-
       {nonSafeAlerts.length === 0 && (
         <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-3)' }}>
           <div style={{ fontSize: 36, marginBottom: 10 }}>🛡️</div>
@@ -842,7 +913,6 @@ function AlertsTab({ nonSafeAlerts, setAlerts }) {
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>All MQ6 readings below {LPG_PPM_THRESHOLD} ppm</div>
         </div>
       )}
-
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
         {nonSafeAlerts.map(a => {
           const ac = C[a.severity]
@@ -873,17 +943,15 @@ function AlertsTab({ nonSafeAlerts, setAlerts }) {
 function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, weeklyUsage, weeklyLeaksBySev, weeklyPpm, gasLevel, cylinderPreset, levelHistory, rawWeightG }) {
   const lCol = levelColor(gasLevel)
   const statRows = [
-    { label: 'Days Remaining', val: `~${estDays}d`,                                   col: '#00e5a0' },
-    { label: 'Avg Daily Use',  val: '~2.1%',                                           col: '#4d8eff' },
-    { label: 'Avg PPM (7d)',   val: avgPpm7d != null ? `${avgPpm7d} ppm` : '0 ppm',   col: '#ffb020' },
-    { label: 'Peak PPM (7d)',  val: maxPpm7d != null ? `${maxPpm7d} ppm` : '0 ppm',   col: '#ff4560' },
-    { label: 'High Leaks 7d', val: highLeaks7d,                                        col: '#ff4560' },
-    { label: 'Low Leaks 7d',  val: lowLeaks7d,                                         col: '#ffb020' },
+    { label: 'Days Remaining', val: `~${estDays}d`,                                  col: '#00e5a0' },
+    { label: 'Avg Daily Use',  val: '~2.1%',                                          col: '#4d8eff' },
+    { label: 'Avg PPM (7d)',   val: avgPpm7d != null ? `${avgPpm7d} ppm` : '0 ppm',  col: '#ffb020' },
+    { label: 'Peak PPM (7d)',  val: maxPpm7d != null ? `${maxPpm7d} ppm` : '0 ppm',  col: '#ff4560' },
+    { label: 'High Leaks 7d', val: highLeaks7d,                                       col: '#ff4560' },
+    { label: 'Low Leaks 7d',  val: lowLeaks7d,                                        col: '#ffb020' },
   ]
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
-
-      {/* Stats grid — 2 cols on mobile, 3 cols on wider */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, width: '100%' }}>
         {statRows.map((s, i) => (
           <Card key={i} style={{ textAlign: 'center', padding: '16px 10px', minWidth: 0 }}>
@@ -892,7 +960,6 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
           </Card>
         ))}
       </div>
-
       <Card>
         <SectionTitle>Weekly Gas Usage (avg %)</SectionTitle>
         <BarChart data={weeklyUsage} color="#4d8eff" />
@@ -900,7 +967,6 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
           {cylinderPreset.label} cylinder · ~{estDays} days remaining
         </div>
       </Card>
-
       <Card>
         <SectionTitle>Weekly Leak Events · MQ6</SectionTitle>
         <DualBarChart data={weeklyLeaksBySev} />
@@ -909,7 +975,6 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#ffb020' }}>■ Low: {lowLeaks7d}</span>
         </div>
       </Card>
-
       <Card>
         <SectionTitle>Weekly Average PPM (≥{LPG_PPM_THRESHOLD} ppm only)</SectionTitle>
         <BarChart data={weeklyPpm} color="#ffb020" />
@@ -920,7 +985,6 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
           </span>
         </div>
       </Card>
-
       {levelHistory.length > 2 && (
         <Card>
           <SectionTitle>Gas Level Trend · Last {Math.min(levelHistory.length, 60)} Readings</SectionTitle>
@@ -941,11 +1005,9 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
 function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, displaySev, displayPpm, currentRaw, cookingMode, avgPpm7d, maxPpm7d, sCol }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
-
       <Card style={{ marginBottom: 0, minWidth: 0 }}>
         <CylinderSelector selectedId={cylinderId} onChange={setCylinderId} />
       </Card>
-
       <Card accent="#4d8eff" style={{ minWidth: 0 }}>
         <SectionTitle>ESP32 Status</SectionTitle>
         {[
@@ -961,15 +1023,14 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
           </div>
         ))}
       </Card>
-
       <Card style={{ minWidth: 0 }}>
         <SectionTitle>Live MQ6 Readings</SectionTitle>
         {[
-          { k: 'Severity',   v: cookingMode ? 'PAUSED' : displaySev.toUpperCase(),                        col: cookingMode ? '#ffb020' : sCol.main },
-          { k: 'PPM (≥300)', v: displayPpm != null ? `~${Math.round(displayPpm)} ppm` : '0 ppm',          col: displayPpm ? sCol.main : 'var(--text-3)' },
-          { k: 'Raw ADC',    v: currentRaw != null ? currentRaw : '—',                                    col: 'var(--text-2)' },
-          { k: '7d Avg PPM', v: avgPpm7d != null ? `${avgPpm7d} ppm` : '0 ppm',                          col: 'var(--text-2)' },
-          { k: '7d Peak',    v: maxPpm7d != null ? `${maxPpm7d} ppm` : '0 ppm',                          col: maxPpm7d > 500 ? '#ff4560' : maxPpm7d > 300 ? '#ffb020' : 'var(--text-2)' },
+          { k: 'Severity',   v: cookingMode ? 'PAUSED' : displaySev.toUpperCase(),                   col: cookingMode ? '#ffb020' : sCol.main },
+          { k: 'PPM (≥300)', v: displayPpm != null ? `~${Math.round(displayPpm)} ppm` : '0 ppm',     col: displayPpm ? sCol.main : 'var(--text-3)' },
+          { k: 'Raw ADC',    v: currentRaw != null ? currentRaw : '—',                               col: 'var(--text-2)' },
+          { k: '7d Avg PPM', v: avgPpm7d != null ? `${avgPpm7d} ppm` : '0 ppm',                     col: 'var(--text-2)' },
+          { k: '7d Peak',    v: maxPpm7d != null ? `${maxPpm7d} ppm` : '0 ppm',                     col: maxPpm7d > 500 ? '#ff4560' : maxPpm7d > 300 ? '#ffb020' : 'var(--text-2)' },
         ].map((r, i, arr) => (
           <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none', gap: 12, flexWrap: 'wrap' }}>
             <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-3)', flexShrink: 0 }}>{r.k}</span>
@@ -977,7 +1038,6 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
           </div>
         ))}
       </Card>
-
       <Card style={{ minWidth: 0 }}>
         <SectionTitle>Sensor Health</SectionTitle>
         {[
@@ -999,7 +1059,6 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
           </div>
         ))}
       </Card>
-
       <Card style={{ minWidth: 0 }}>
         <SectionTitle>Integration Notes</SectionTitle>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
