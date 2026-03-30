@@ -10,12 +10,14 @@ export const CYLINDER_PRESETS = [
 ]
 const DEFAULT_CYLINDER = '6kg'
 
-// ─── FIX 1: More robust weightToPercent with NaN guard ────────────────────
+// ─── weightToPercent — fully defensive ────────────────────────────────────
 const weightToPercent = (weight_g, preset) => {
   if (weight_g == null || !preset) return 0
-  const raw = ((Number(weight_g) - preset.tare_g) / preset.net_g) * 100
+  const w   = parseFloat(weight_g)          // parseFloat handles strings, ints, floats
+  if (isNaN(w)) return 0
+  const raw     = ((w - preset.tare_g) / preset.net_g) * 100
   const clamped = Math.min(100, Math.max(0, raw))
-  return isNaN(clamped) ? 0 : clamped
+  return isNaN(clamped) ? 0 : parseFloat(clamped.toFixed(2))
 }
 
 // ─── MQ6 thresholds ────────────────────────────────────────────────────────
@@ -315,7 +317,6 @@ function CookingModeToggle({ active, onToggle }) {
 export default function App() {
   const [tab, setTab]                            = useState('dashboard')
   const [rawWeightG, setRawWeightG]              = useState(null)
-  const [gasLevel, setGasLevel]                  = useState(0)
   const [levelHistory, setLevelHistory]          = useState([])
   const [connected, setConnected]                = useState(false)
   const [lastSeen, setLastSeen]                  = useState(new Date())
@@ -324,8 +325,11 @@ export default function App() {
   const [cylinderId, setCylinderIdRaw]           = useState(() => localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)
   const cylinderPreset                           = CYLINDER_PRESETS.find(p => p.id === cylinderId) || CYLINDER_PRESETS[1]
 
-  // ── FIX 3: Keep a ref to cylinderPreset so the realtime callback
-  //    always reads the latest preset without needing it as a dependency
+  // ── gasLevel is DERIVED every render — no useState, no lag, no sync bugs
+  //    Whenever rawWeightG or cylinderPreset changes, gasLevel is always correct.
+  const gasLevel = rawWeightG != null ? weightToPercent(rawWeightG, cylinderPreset) : 0
+
+  // Keep a ref so the realtime callback always reads the latest preset
   const cylinderPresetRef = useRef(cylinderPreset)
   useEffect(() => { cylinderPresetRef.current = cylinderPreset }, [cylinderPreset])
 
@@ -333,6 +337,17 @@ export default function App() {
     setCylinderIdRaw(id)
     localStorage.setItem('gaswatch_cylinder', id)
   }
+
+  // Append to levelHistory whenever a new weight arrives (realtime or initial)
+  // gasLevel is derived above, so this is the only side-effect we need
+  const prevWeightRef = useRef(null)
+  useEffect(() => {
+    if (rawWeightG == null) return
+    if (rawWeightG === prevWeightRef.current) return   // skip duplicates
+    prevWeightRef.current = rawWeightG
+    const pct = weightToPercent(rawWeightG, cylinderPreset)
+    setLevelHistory(h => [...h.slice(-59), pct])
+  }, [rawWeightG, cylinderPreset])
 
   const [severity, setSeverity]                  = useState('safe')
   const [currentPpm, setCurrentPpm]              = useState(null)
@@ -369,16 +384,6 @@ export default function App() {
     const t = setTimeout(() => setCookingMode(false), ms)
     return () => clearTimeout(t)
   }, [cookingMode, cookingStart])
-
-  // ── FIX 4: Recompute gasLevel AND update levelHistory when weight OR
-  //    cylinder changes — this is what was missing for real-time gauge movement
-  useEffect(() => {
-    if (rawWeightG == null) return
-    const pct = weightToPercent(rawWeightG, cylinderPreset)
-    setGasLevel(pct)
-    // Also push to history so sparkline stays live
-    setLevelHistory(h => [...h.slice(-59), pct])
-  }, [rawWeightG, cylinderPreset])
 
   const playAlarm = useCallback(() => {
     try {
@@ -470,7 +475,6 @@ export default function App() {
         // ── FIX 5: Set all three together atomically so gauge, number
         //    and history are all in sync from the very first render
         setRawWeightG(latestWeight)
-        setGasLevel(latestPct)
         setLastSeen(new Date(lvls[0].created_at))
         setConnected(true)
         setLevelHistory(lvls.map(r => weightToPercent(Number(r.weight_grams), pr)).reverse())
@@ -567,10 +571,10 @@ export default function App() {
         const pct = weightToPercent(w, pr)
 
         setRawWeightG(w)
-        setGasLevel(pct)                               // ← direct update, no lag
         setLastSeen(new Date(p.new.created_at))
         setConnected(true)
-        // levelHistory update is handled by the useEffect above watching rawWeightG
+        // gasLevel is derived from rawWeightG every render — no need to set it here
+        // levelHistory gets a new point whenever rawWeightG changes (see useEffect below)
       })
       .subscribe()
 
