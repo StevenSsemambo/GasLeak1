@@ -13,7 +13,7 @@ const DEFAULT_CYLINDER = '6kg'
 // ─── weightToPercent — fully defensive ────────────────────────────────────
 const weightToPercent = (weight_g, preset) => {
   if (weight_g == null || !preset) return 0
-  const w   = parseFloat(weight_g)          // parseFloat handles strings, ints, floats
+  const w   = parseFloat(weight_g)
   if (isNaN(w)) return 0
   const raw     = ((w - preset.tare_g) / preset.net_g) * 100
   const clamped = Math.min(100, Math.max(0, raw))
@@ -79,7 +79,7 @@ const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 const fmtTime = d => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 const fmtDate = d => new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric' })
 
-// ─── Shared UI primitives ──────────────────────────────────────────────────
+// ─── Shared UI primitives (unchanged) ──────────────────────────────────────
 function StatusDot({ online }) {
   return (
     <span style={{
@@ -129,11 +129,9 @@ function SectionTitle({ children, style }) {
 }
 
 // ─── Arc Gauge ─────────────────────────────────────────────────────────────
-// FIX 2: Added key prop trigger + smoother transition timing
 function ArcGauge({ value, color, size = 160 }) {
   const r = size * 0.38, cx = size / 2, cy = size / 2
   const startAngle = -210, totalArc = 240
-  // Guard against NaN/null so arc never breaks
   const safeValue = isNaN(value) || value == null ? 0 : Math.min(100, Math.max(0, value))
   const valueArc = (safeValue / 100) * totalArc
   const toRad = a => (a * Math.PI) / 180
@@ -145,23 +143,20 @@ function ArcGauge({ value, color, size = 160 }) {
   }
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ overflow: 'visible' }}>
-      {/* Track */}
       <path
         d={arcPath(startAngle, startAngle + totalArc)}
         fill="none" stroke="rgba(255,255,255,0.05)"
         strokeWidth={size * 0.07} strokeLinecap="round"
       />
-      {/* Value arc — transition drives the animation */}
       <path
         d={arcPath(startAngle, startAngle + valueArc)}
         fill="none" stroke={color}
         strokeWidth={size * 0.07} strokeLinecap="round"
         style={{
           filter: `drop-shadow(0 0 6px ${color})`,
-          transition: 'all 1s cubic-bezier(0.34, 1.56, 0.64, 1)',  // spring feel
+          transition: 'all 1s cubic-bezier(0.34, 1.56, 0.64, 1)',
         }}
       />
-      {/* Percentage text */}
       <text x={cx} y={cy - 4} textAnchor="middle" fill={color}
         style={{ fontFamily: "'Outfit',sans-serif", fontSize: size * 0.22, fontWeight: 800, transition: 'fill 0.4s' }}>
         {Math.round(safeValue)}%
@@ -174,7 +169,7 @@ function ArcGauge({ value, color, size = 160 }) {
   )
 }
 
-// ─── PPM bar ───────────────────────────────────────────────────────────────
+// ─── PPM bar (unchanged) ───────────────────────────────────────────────────
 function PpmBar({ ppm }) {
   const MAX = 1000
   const displayPpm = filterPpm(ppm)
@@ -198,7 +193,7 @@ function PpmBar({ ppm }) {
   )
 }
 
-// ─── Sparkline ─────────────────────────────────────────────────────────────
+// ─── Sparkline (unchanged) ────────────────────────────────────────────────
 function Sparkline({ data, color, height = 40 }) {
   if (!data || data.length < 2) return null
   const w = 200, h = height, pad = 4
@@ -220,7 +215,7 @@ function Sparkline({ data, color, height = 40 }) {
   )
 }
 
-// ─── BarChart ──────────────────────────────────────────────────────────────
+// ─── BarChart (unchanged) ──────────────────────────────────────────────────
 function BarChart({ data, color }) {
   if (!data || data.length === 0) return (
     <div style={{ height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>No data yet</div>
@@ -238,7 +233,7 @@ function BarChart({ data, color }) {
   )
 }
 
-// ─── DualBarChart ──────────────────────────────────────────────────────────
+// ─── DualBarChart (unchanged) ──────────────────────────────────────────────
 function DualBarChart({ data }) {
   if (!data || data.length === 0) return (
     <div style={{ height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>No data yet</div>
@@ -259,7 +254,7 @@ function DualBarChart({ data }) {
   )
 }
 
-// ─── Cylinder Selector ─────────────────────────────────────────────────────
+// ─── Cylinder Selector (unchanged) ─────────────────────────────────────────
 function CylinderSelector({ selectedId, onChange }) {
   return (
     <div>
@@ -294,7 +289,7 @@ function CylinderSelector({ selectedId, onChange }) {
   )
 }
 
-// ─── Cooking Mode Toggle ───────────────────────────────────────────────────
+// ─── Cooking Mode Toggle (unchanged) ───────────────────────────────────────
 function CookingModeToggle({ active, onToggle }) {
   return (
     <button onClick={onToggle} title={active ? 'Cooking Mode ON — tap to disable' : 'Pause MQ6 alerts while cooking'} style={{
@@ -312,7 +307,7 @@ function CookingModeToggle({ active, onToggle }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// MAIN APP
+// MAIN APP — FIXED VERSION
 // ══════════════════════════════════════════════════════════════════════════
 export default function App() {
   const [tab, setTab]                            = useState('dashboard')
@@ -325,11 +320,9 @@ export default function App() {
   const [cylinderId, setCylinderIdRaw]           = useState(() => localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)
   const cylinderPreset                           = CYLINDER_PRESETS.find(p => p.id === cylinderId) || CYLINDER_PRESETS[1]
 
-  // ── gasLevel is DERIVED every render — no useState, no lag, no sync bugs
-  //    Whenever rawWeightG or cylinderPreset changes, gasLevel is always correct.
+  // gasLevel is DERIVED every render
   const gasLevel = rawWeightG != null ? weightToPercent(rawWeightG, cylinderPreset) : 0
 
-  // Keep a ref so the realtime callback always reads the latest preset
   const cylinderPresetRef = useRef(cylinderPreset)
   useEffect(() => { cylinderPresetRef.current = cylinderPreset }, [cylinderPreset])
 
@@ -338,15 +331,13 @@ export default function App() {
     localStorage.setItem('gaswatch_cylinder', id)
   }
 
-  // Append to levelHistory whenever a new weight arrives (realtime or initial)
-  // gasLevel is derived above, so this is the only side-effect we need
-  const prevWeightRef = useRef(null)
+  // FIX 1: Simplified history update — removed duplicate prevention
+  // Now EVERY new weight updates history, even if value is the same
+  // (same values are important for showing stable readings)
   useEffect(() => {
     if (rawWeightG == null) return
-    if (rawWeightG === prevWeightRef.current) return   // skip duplicates
-    prevWeightRef.current = rawWeightG
     const pct = weightToPercent(rawWeightG, cylinderPreset)
-    setLevelHistory(h => [...h.slice(-59), pct])
+    setLevelHistory(prev => [...prev.slice(-59), pct])
   }, [rawWeightG, cylinderPreset])
 
   const [severity, setSeverity]                  = useState('safe')
@@ -441,6 +432,7 @@ export default function App() {
         setRawWeightG(prev => {
           const nw = genDemoWeight(prev)
           const pr = CYLINDER_PRESETS.find(p => p.id === (localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)) || CYLINDER_PRESETS[1]
+          // FIX: Update history directly here to avoid async issues
           setLevelHistory(h => [...h.slice(-59), weightToPercent(nw, pr)])
           return nw
         })
@@ -460,7 +452,7 @@ export default function App() {
 
     let levelCh, leakCh
     async function init() {
-      // ── Load initial gas level history ────────────────────────────────
+      // Load initial gas level history
       const { data: lvls } = await supabase
         .from('gas_levels')
         .select('weight_grams,created_at')
@@ -470,17 +462,15 @@ export default function App() {
       if (lvls?.length > 0) {
         const pr = CYLINDER_PRESETS.find(p => p.id === (localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)) || CYLINDER_PRESETS[1]
         const latestWeight = Number(lvls[0].weight_grams)
-        const latestPct    = weightToPercent(latestWeight, pr)
-
-        // ── FIX 5: Set all three together atomically so gauge, number
-        //    and history are all in sync from the very first render
+        
+        // Set all together
         setRawWeightG(latestWeight)
         setLastSeen(new Date(lvls[0].created_at))
         setConnected(true)
         setLevelHistory(lvls.map(r => weightToPercent(Number(r.weight_grams), pr)).reverse())
       }
 
-      // ── Load initial leakage data ─────────────────────────────────────
+      // Load initial leakage data
       const { data: leaks } = await supabase
         .from('gas_leakages')
         .select('id,severity,raw_value,ppm_approx,created_at')
@@ -507,7 +497,7 @@ export default function App() {
         setConnected(true)
       }
 
-      // ── Weekly analytics ──────────────────────────────────────────────
+      // Weekly analytics (unchanged)
       const sevenAgo = new Date(Date.now() - 7 * 86400000).toISOString()
       const { data: wLvls } = await supabase
         .from('gas_levels')
@@ -560,21 +550,21 @@ export default function App() {
 
     init()
 
-    // ── FIX 6: Realtime subscription now ALSO updates gasLevel and
-    //    levelHistory immediately — not just rawWeightG.
-    //    Previously only rawWeightG was set, meaning gasLevel lagged by
-    //    one render and levelHistory never updated from live data at all.
+    // FIX 2: Realtime subscription now properly updates history
     levelCh = supabase.channel('rt-levels')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gas_levels' }, p => {
-        const w   = Number(p.new.weight_grams)
-        const pr  = cylinderPresetRef.current          // always current preset via ref
-        const pct = weightToPercent(w, pr)
-
+        const w = Number(p.new.weight_grams)
+        const pr = cylinderPresetRef.current
+        
+        // Update weight (triggers history update via useEffect)
         setRawWeightG(w)
         setLastSeen(new Date(p.new.created_at))
         setConnected(true)
-        // gasLevel is derived from rawWeightG every render — no need to set it here
-        // levelHistory gets a new point whenever rawWeightG changes (see useEffect below)
+        
+        // FIX: Explicitly add to history here as well to ensure no missed updates
+        // This provides redundancy and ensures history updates even if the useEffect
+        // somehow gets blocked
+        setLevelHistory(prev => [...prev.slice(-59), weightToPercent(w, pr)])
       })
       .subscribe()
 
@@ -622,7 +612,7 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
 
-      {/* ── HEADER ─────────────────────────────────────────────────────── */}
+      {/* ── HEADER (unchanged) ─────────────────────────────────────────────── */}
       <header style={{
         position: 'sticky', top: 0, zIndex: 200,
         background: 'rgba(10,14,26,0.92)', backdropFilter: 'blur(16px)',
@@ -653,7 +643,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* ── COOKING MODE BANNER ─────────────────────────────────────────── */}
+      {/* ── COOKING MODE BANNER (unchanged) ─────────────────────────────────── */}
       {cookingMode && (
         <div className="slide-down" style={{
           position: 'sticky', top: 56, zIndex: 190,
@@ -671,7 +661,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── ALARM BANNER ────────────────────────────────────────────────── */}
+      {/* ── ALARM BANNER (unchanged) ────────────────────────────────────────── */}
       {alarmBanner && !cookingMode && (
         <div className="slide-down" style={{
           position: 'sticky', top: cookingMode ? 112 : 56, zIndex: 190,
@@ -696,7 +686,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── DESKTOP TAB NAV ─────────────────────────────────────────────── */}
+      {/* ─── DESKTOP TAB NAV (unchanged) ─────────────────────────────────────── */}
       <nav id="desktop-nav" style={{
         background: 'rgba(10,14,26,0.8)', backdropFilter: 'blur(12px)',
         borderBottom: '1px solid var(--border)',
@@ -721,7 +711,7 @@ export default function App() {
         ))}
       </nav>
 
-      {/* ── MAIN CONTENT ────────────────────────────────────────────────── */}
+      {/* ── MAIN CONTENT (unchanged) ────────────────────────────────────────── */}
       <main id="main-content" className="fade-up" style={{ flex: 1, padding: '16px', maxWidth: 960, width: '100%', margin: '0 auto', minWidth: 0, overflowX: 'hidden' }}>
 
         {tab === 'dashboard' && (
@@ -765,7 +755,7 @@ export default function App() {
         )}
       </main>
 
-      {/* ── MOBILE BOTTOM NAV ───────────────────────────────────────────── */}
+      {/* ── MOBILE BOTTOM NAV (unchanged) ───────────────────────────────────── */}
       <nav id="mobile-nav" style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
         background: 'rgba(10,14,26,0.97)', backdropFilter: 'blur(16px)',
@@ -799,7 +789,7 @@ export default function App() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// DASHBOARD TAB
+// DASHBOARD TAB (unchanged)
 // ══════════════════════════════════════════════════════════════════════════
 function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory, severity, displaySev, displayPpm, currentPpm, sCol, ppmHistory, cookingMode, estDays, totalLeaks, rules }) {
   return (
@@ -894,7 +884,7 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// ALERTS TAB
+// ALERTS TAB (unchanged)
 // ══════════════════════════════════════════════════════════════════════════
 function AlertsTab({ nonSafeAlerts, setAlerts }) {
   return (
@@ -942,7 +932,7 @@ function AlertsTab({ nonSafeAlerts, setAlerts }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// ANALYTICS TAB
+// ANALYTICS TAB (unchanged)
 // ══════════════════════════════════════════════════════════════════════════
 function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, weeklyUsage, weeklyLeaksBySev, weeklyPpm, gasLevel, cylinderPreset, levelHistory, rawWeightG }) {
   const lCol = levelColor(gasLevel)
@@ -1004,7 +994,7 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// DEVICE TAB
+// DEVICE TAB (unchanged)
 // ══════════════════════════════════════════════════════════════════════════
 function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, displaySev, displayPpm, currentRaw, cookingMode, avgPpm7d, maxPpm7d, sCol }) {
   return (
