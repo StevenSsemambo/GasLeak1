@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from './supabase.js'
 
 // ─── Cylinder presets (East Africa standard LPG) ───────────────────────────
+// tare_g = weight of the EMPTY cylinder body only (no gas)
+// net_g  = weight of gas when full
+// total full weight = tare_g + net_g
 export const CYLINDER_PRESETS = [
   { id: '3kg',  label: '3 kg',  net_g:  3000, tare_g:  5000 },
   { id: '6kg',  label: '6 kg',  net_g:  6000, tare_g:  8000 },
@@ -10,12 +13,21 @@ export const CYLINDER_PRESETS = [
 ]
 const DEFAULT_CYLINDER = '6kg'
 
-// ─── weightToPercent — fully defensive ────────────────────────────────────
-const weightToPercent = (weight_g, preset) => {
+// ─── weightToPercent — handles BOTH total weight and net-gas-only weight ──
+// customTare_g: if set (from manual calibration), uses that instead of preset tare
+const weightToPercent = (weight_g, preset, customTare_g = null) => {
   if (weight_g == null || !preset) return 0
-  const w   = parseFloat(weight_g)
+  const w = parseFloat(weight_g)
   if (isNaN(w)) return 0
-  const raw     = ((w - preset.tare_g) / preset.net_g) * 100
+
+  const tare = customTare_g != null ? parseFloat(customTare_g) : preset.tare_g
+
+  // If weight is less than or equal to net_g, the ESP32 is probably sending
+  // net gas weight only (already subtracted tare). Use it directly.
+  const looksLikeNetOnly = (customTare_g == null) && (w <= preset.net_g * 1.05)
+
+  const gasRemaining = looksLikeNetOnly ? w : (w - tare)
+  const raw     = (gasRemaining / preset.net_g) * 100
   const clamped = Math.min(100, Math.max(0, raw))
   return isNaN(clamped) ? 0 : parseFloat(clamped.toFixed(2))
 }
@@ -320,8 +332,22 @@ export default function App() {
   const [cylinderId, setCylinderIdRaw]           = useState(() => localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)
   const cylinderPreset                           = CYLINDER_PRESETS.find(p => p.id === cylinderId) || CYLINDER_PRESETS[1]
 
+  // customTare_g: weight of your EMPTY cylinder (set via calibration in Device tab)
+  // When null, the app auto-detects whether ESP32 sends total or net-only weight
+  const [customTare_g, setCustomTare_g]          = useState(() => {
+    const v = localStorage.getItem('gaswatch_custom_tare')
+    return v != null ? parseFloat(v) : null
+  })
+  const setCustomTare = (val) => {
+    setCustomTare_g(val)
+    if (val == null) localStorage.removeItem('gaswatch_custom_tare')
+    else localStorage.setItem('gaswatch_custom_tare', String(val))
+  }
+  const customTareRef = useRef(customTare_g)
+  useEffect(() => { customTareRef.current = customTare_g }, [customTare_g])
+
   // gasLevel is DERIVED every render
-  const gasLevel = rawWeightG != null ? weightToPercent(rawWeightG, cylinderPreset) : 0
+  const gasLevel = rawWeightG != null ? weightToPercent(rawWeightG, cylinderPreset, customTare_g) : 0
 
   const cylinderPresetRef = useRef(cylinderPreset)
   useEffect(() => { cylinderPresetRef.current = cylinderPreset }, [cylinderPreset])
@@ -331,14 +357,12 @@ export default function App() {
     localStorage.setItem('gaswatch_cylinder', id)
   }
 
-  // FIX 1: Simplified history update — removed duplicate prevention
-  // Now EVERY new weight updates history, even if value is the same
-  // (same values are important for showing stable readings)
+  // History update — fires whenever weight, preset, or tare changes
   useEffect(() => {
     if (rawWeightG == null) return
-    const pct = weightToPercent(rawWeightG, cylinderPreset)
+    const pct = weightToPercent(rawWeightG, cylinderPreset, customTare_g)
     setLevelHistory(prev => [...prev.slice(-59), pct])
-  }, [rawWeightG, cylinderPreset])
+  }, [rawWeightG, cylinderPreset, customTare_g])
 
   const [severity, setSeverity]                  = useState('safe')
   const [currentPpm, setCurrentPpm]              = useState(null)
@@ -461,13 +485,14 @@ export default function App() {
 
       if (lvls?.length > 0) {
         const pr = CYLINDER_PRESETS.find(p => p.id === (localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)) || CYLINDER_PRESETS[1]
+        const ct = customTareRef.current
         const latestWeight = Number(lvls[0].weight_grams)
         
         // Set all together
         setRawWeightG(latestWeight)
         setLastSeen(new Date(lvls[0].created_at))
         setConnected(true)
-        setLevelHistory(lvls.map(r => weightToPercent(Number(r.weight_grams), pr)).reverse())
+        setLevelHistory(lvls.map(r => weightToPercent(Number(r.weight_grams), pr, ct)).reverse())
       }
 
       // Load initial leakage data
@@ -506,11 +531,12 @@ export default function App() {
 
       if (wLvls?.length > 0) {
         const pr = CYLINDER_PRESETS.find(p => p.id === (localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)) || CYLINDER_PRESETS[1]
+        const ct = customTareRef.current
         const sums = {}, cnts = {}
         DAYS.forEach(d => { sums[d] = 0; cnts[d] = 0 })
         wLvls.forEach(r => {
           const d = DAYS[new Date(r.created_at).getDay()]
-          sums[d] += weightToPercent(Number(r.weight_grams), pr)
+          sums[d] += weightToPercent(Number(r.weight_grams), pr, ct)
           cnts[d]++
         })
         setWeeklyUsage(DAYS.map(d => ({ label: d.slice(0, 3), value: cnts[d] > 0 ? Math.round(sums[d] / cnts[d]) : 0 })))
@@ -550,21 +576,17 @@ export default function App() {
 
     init()
 
-    // FIX 2: Realtime subscription now properly updates history
+    // Realtime subscription
     levelCh = supabase.channel('rt-levels')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gas_levels' }, p => {
         const w = Number(p.new.weight_grams)
         const pr = cylinderPresetRef.current
+        const ct = customTareRef.current
         
-        // Update weight (triggers history update via useEffect)
         setRawWeightG(w)
         setLastSeen(new Date(p.new.created_at))
         setConnected(true)
-        
-        // FIX: Explicitly add to history here as well to ensure no missed updates
-        // This provides redundancy and ensures history updates even if the useEffect
-        // somehow gets blocked
-        setLevelHistory(prev => [...prev.slice(-59), weightToPercent(w, pr)])
+        setLevelHistory(prev => [...prev.slice(-59), weightToPercent(w, pr, ct)])
       })
       .subscribe()
 
@@ -750,6 +772,9 @@ export default function App() {
               connected={connected} demoMode={demoMode} lastSeen={lastSeen}
               displaySev={displaySev} displayPpm={displayPpm} currentRaw={currentRaw}
               cookingMode={cookingMode} avgPpm7d={avgPpm7d} maxPpm7d={maxPpm7d} sCol={sCol}
+              rawWeightG={rawWeightG} cylinderPreset={cylinderPreset}
+              customTare_g={customTare_g} setCustomTare={setCustomTare}
+              gasLevel={gasLevel}
             />
           </div>
         )}
@@ -994,14 +1019,208 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// DEVICE TAB (unchanged)
+// DEVICE TAB
 // ══════════════════════════════════════════════════════════════════════════
-function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, displaySev, displayPpm, currentRaw, cookingMode, avgPpm7d, maxPpm7d, sCol }) {
+function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, displaySev, displayPpm,
+  currentRaw, cookingMode, avgPpm7d, maxPpm7d, sCol,
+  rawWeightG, cylinderPreset, customTare_g, setCustomTare, gasLevel }) {
+
+  const [tareInput, setTareInput] = useState(
+    customTare_g != null ? String(customTare_g / 1000) : ''
+  )
+  const [tareMsg, setTareMsg] = useState(null) // { text, ok }
+
+  // What mode is the app currently using?
+  const usingCustomTare = customTare_g != null
+  const usingAutoNet    = !usingCustomTare && rawWeightG != null && rawWeightG <= cylinderPreset.net_g * 1.05
+  const usingPresetTare = !usingCustomTare && !usingAutoNet
+
+  const modeLabel = usingCustomTare
+    ? `Custom tare: ${(customTare_g / 1000).toFixed(2)} kg`
+    : usingAutoNet
+      ? 'Auto-detected: net gas weight mode'
+      : `Preset tare: ${(cylinderPreset.tare_g / 1000).toFixed(0)} kg`
+  const modeColor = usingCustomTare ? '#00e5a0' : usingAutoNet ? '#4d8eff' : '#ffb020'
+
+  const handleSaveTare = () => {
+    const kg = parseFloat(tareInput)
+    if (isNaN(kg) || kg < 1 || kg > 30) {
+      setTareMsg({ text: 'Enter a valid tare weight between 1–30 kg', ok: false })
+      return
+    }
+    setCustomTare(kg * 1000)
+    setTareMsg({ text: `✓ Tare set to ${kg.toFixed(2)} kg — gauge will update now`, ok: true })
+    setTimeout(() => setTareMsg(null), 4000)
+  }
+
+  const handleClearTare = () => {
+    setCustomTare(null)
+    setTareInput('')
+    setTareMsg({ text: 'Custom tare cleared — using auto-detection', ok: true })
+    setTimeout(() => setTareMsg(null), 3000)
+  }
+
+  // "Set tare from live reading" — stamp current weight as the empty-cylinder weight
+  const handleStampTare = () => {
+    if (rawWeightG == null) return
+    const kg = rawWeightG / 1000
+    setTareInput(kg.toFixed(2))
+    setCustomTare(rawWeightG)
+    setTareMsg({ text: `✓ Tare stamped at ${kg.toFixed(2)} kg (current reading)`, ok: true })
+    setTimeout(() => setTareMsg(null), 4000)
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
+
+      {/* ── Cylinder selector ── */}
       <Card style={{ marginBottom: 0, minWidth: 0 }}>
         <CylinderSelector selectedId={cylinderId} onChange={setCylinderId} />
       </Card>
+
+      {/* ── Weight Calibration card ── */}
+      <Card accent="#4d8eff" style={{ minWidth: 0 }}>
+        <SectionTitle>⚖️ Load Cell Calibration</SectionTitle>
+
+        {/* Current mode banner */}
+        <div style={{
+          padding: '10px 14px', borderRadius: 'var(--r-sm)', marginBottom: 16,
+          background: 'var(--surface2)', border: `1px solid ${modeColor}44`,
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: modeColor, flexShrink: 0, boxShadow: `0 0 8px ${modeColor}` }} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: modeColor, fontWeight: 600, letterSpacing: '0.05em' }}>
+              ACTIVE MODE
+            </div>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-1)', marginTop: 2 }}>
+              {modeLabel}
+            </div>
+          </div>
+          <div style={{ marginLeft: 'auto', textAlign: 'right', flexShrink: 0 }}>
+            <div style={{ fontFamily: 'var(--font-disp)', fontSize: 22, fontWeight: 800, color: '#4d8eff', lineHeight: 1 }}>
+              {Math.round(gasLevel)}%
+            </div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)', marginTop: 2 }}>
+              current level
+            </div>
+          </div>
+        </div>
+
+        {/* Live weight readout */}
+        {rawWeightG != null && (
+          <div style={{
+            padding: '10px 14px', borderRadius: 'var(--r-sm)', marginBottom: 16,
+            background: 'var(--surface3)', border: '1px solid var(--border)',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+          }}>
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-3)' }}>
+              Live reading from ESP32
+            </span>
+            <span style={{ fontFamily: 'var(--font-disp)', fontSize: 18, fontWeight: 800, color: 'var(--text-1)' }}>
+              {(rawWeightG / 1000).toFixed(3)} kg
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', marginLeft: 6, fontWeight: 400 }}>
+                ({rawWeightG.toFixed(0)} g)
+              </span>
+            </span>
+          </div>
+        )}
+
+        {/* Explanation */}
+        <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-2)', lineHeight: 1.65, marginBottom: 16 }}>
+          If the percentage reads <strong style={{ color: 'var(--text-1)' }}>0% / always red</strong>, your ESP32 is sending the
+          weight differently than expected. Use one of the options below to fix it.
+        </div>
+
+        {/* Option A: stamp tare from live reading */}
+        {rawWeightG != null && (
+          <div style={{
+            padding: '12px 14px', borderRadius: 'var(--r-sm)', marginBottom: 12,
+            background: 'rgba(0,229,160,0.06)', border: '1px solid rgba(0,229,160,0.2)',
+          }}>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600, color: '#00e5a0', marginBottom: 4 }}>
+              Option A — Empty cylinder on scale right now?
+            </div>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5, marginBottom: 10 }}>
+              Place your <strong style={{ color: 'var(--text-2)' }}>empty cylinder</strong> on the scale, wait for a stable reading, then tap below to stamp the current reading as the tare weight.
+            </div>
+            <button onClick={handleStampTare} style={{
+              padding: '8px 16px', borderRadius: 8, fontSize: 12, fontWeight: 700,
+              background: 'rgba(0,229,160,0.15)', border: '1px solid rgba(0,229,160,0.4)',
+              color: '#00e5a0', letterSpacing: '0.03em',
+            }}>
+              📍 Stamp {rawWeightG != null ? `${(rawWeightG / 1000).toFixed(3)} kg` : '—'} as Empty Tare
+            </button>
+          </div>
+        )}
+
+        {/* Option B: manual tare entry */}
+        <div style={{
+          padding: '12px 14px', borderRadius: 'var(--r-sm)', marginBottom: 12,
+          background: 'rgba(77,142,255,0.06)', border: '1px solid rgba(77,142,255,0.2)',
+        }}>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600, color: '#4d8eff', marginBottom: 4 }}>
+            Option B — Enter empty cylinder weight manually
+          </div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5, marginBottom: 10 }}>
+            Check the sticker on your cylinder for the tare weight (marked <strong style={{ color: 'var(--text-2)' }}>T</strong> or <strong style={{ color: 'var(--text-2)' }}>Tare</strong>), then enter it below in kg.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              type="number" min="1" max="30" step="0.01"
+              value={tareInput}
+              onChange={e => setTareInput(e.target.value)}
+              placeholder={`e.g. ${(cylinderPreset.tare_g / 1000).toFixed(0)}.00`}
+              style={{
+                flex: 1, minWidth: 100, padding: '8px 12px', borderRadius: 8,
+                background: 'var(--surface3)', border: '1px solid var(--border2)',
+                color: 'var(--text-1)', fontFamily: 'var(--font-mono)', fontSize: 13,
+                outline: 'none',
+              }}
+            />
+            <button onClick={handleSaveTare} style={{
+              padding: '8px 16px', borderRadius: 8, fontSize: 12, fontWeight: 700,
+              background: 'rgba(77,142,255,0.15)', border: '1px solid rgba(77,142,255,0.4)',
+              color: '#4d8eff', whiteSpace: 'nowrap',
+            }}>
+              Save Tare
+            </button>
+            {customTare_g != null && (
+              <button onClick={handleClearTare} style={{
+                padding: '8px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                background: 'var(--surface2)', border: '1px solid var(--border)',
+                color: 'var(--text-3)', whiteSpace: 'nowrap',
+              }}>
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Feedback message */}
+        {tareMsg && (
+          <div style={{
+            padding: '10px 14px', borderRadius: 'var(--r-sm)',
+            background: tareMsg.ok ? 'rgba(0,229,160,0.08)' : 'rgba(255,69,96,0.08)',
+            border: `1px solid ${tareMsg.ok ? 'rgba(0,229,160,0.3)' : 'rgba(255,69,96,0.3)'}`,
+            fontFamily: 'var(--font-body)', fontSize: 13,
+            color: tareMsg.ok ? '#00e5a0' : '#ff4560',
+          }}>
+            {tareMsg.text}
+          </div>
+        )}
+
+        {/* Formula display */}
+        <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 'var(--r-sm)', background: 'var(--surface3)', border: '1px solid var(--border)', fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', lineHeight: 1.8 }}>
+          {usingAutoNet
+            ? <>Formula: <span style={{ color: 'var(--text-2)' }}>weight_g ÷ {cylinderPreset.net_g} × 100</span> <span style={{ color: '#4d8eff' }}>(net-only mode)</span></>
+            : <>Formula: <span style={{ color: 'var(--text-2)' }}>(weight_g − {usingCustomTare ? customTare_g : cylinderPreset.tare_g}g) ÷ {cylinderPreset.net_g} × 100</span></>
+          }
+          {' '}· Clamped 0–100%
+        </div>
+      </Card>
+
+      {/* ── ESP32 Status ── */}
       <Card accent="#4d8eff" style={{ minWidth: 0 }}>
         <SectionTitle>ESP32 Status</SectionTitle>
         {[
@@ -1017,6 +1236,8 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
           </div>
         ))}
       </Card>
+
+      {/* ── Live MQ6 Readings ── */}
       <Card style={{ minWidth: 0 }}>
         <SectionTitle>Live MQ6 Readings</SectionTitle>
         {[
@@ -1032,6 +1253,8 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
           </div>
         ))}
       </Card>
+
+      {/* ── Sensor Health ── */}
       <Card style={{ minWidth: 0 }}>
         <SectionTitle>Sensor Health</SectionTitle>
         {[
@@ -1053,12 +1276,14 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
           </div>
         ))}
       </Card>
+
+      {/* ── Integration Notes ── */}
       <Card style={{ minWidth: 0 }}>
         <SectionTitle>Integration Notes</SectionTitle>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {[
             { icon: '🔗', title: 'ESP32 WiFi',      desc: 'Set WIFI_SSID + WIFI_PASSWORD in firmware.' },
-            { icon: '⚖️', title: 'HX711 Load Cell', desc: 'Posts weight_grams every 5 s. % is computed from cylinder selection.' },
+            { icon: '⚖️', title: 'HX711 Load Cell', desc: 'Posts weight_grams every 5 s. Use the calibration card above if the % is stuck at 0.' },
             { icon: '📊', title: 'MQ6 Table',        desc: 'Posts severity, raw_value, ppm_approx. Readings below 300 ppm are suppressed.' },
             { icon: '📡', title: 'Realtime',          desc: 'Enable Realtime on both tables in Supabase → Database → Replication.' },
           ].map((c, i) => (
