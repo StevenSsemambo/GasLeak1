@@ -32,346 +32,44 @@ const weightToPercent = (weight_g, preset, customTare_g = null) => {
   return isNaN(clamped) ? 0 : parseFloat(clamped.toFixed(2))
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// LPG GAS SAFETY STANDARD THRESHOLDS
-// Source: OSHA, IEC 60079, NFPA 58, EN 50194 and standard LPG safety refs
-// LPG (mainly propane/butane mix):
-//   LEL (Lower Explosive Limit) = 1.8% vol = 18,000 ppm
-//   UEL (Upper Explosive Limit) = 9.5% vol = 95,000 ppm
-//   IDLH (Immediately Dangerous to Life/Health) = 2,000 ppm (propane, NIOSH)
-//   Alarm Level 1 (first warning)  = 10% of LEL = ~1,800 ppm  
-//   Alarm Level 2 (evacuate)       = 25% of LEL = ~4,500 ppm
-//   However: MQ6 sensor practical detection range starts ~300 ppm
-//   So we use these PRACTICAL thresholds for MQ6 in household context:
-//     300–999 ppm   → LOW    — detectable trace, ventilate, inspect
-//    1000–1999 ppm  → MEDIUM — significant leak, evacuate area, no ignition
-//    2000+ ppm      → HIGH   — dangerous concentration, full emergency
-// ════════════════════════════════════════════════════════════════════════════
-const LPG_PPM_THRESHOLD    = 300    // MQ6 detection floor — below this is noise
-const LPG_PPM_LOW          = 300    // Trace detectable — caution
-const LPG_PPM_MEDIUM       = 1000   // Significant leak — evacuate room
-const LPG_PPM_HIGH         = 2000   // Dangerous — full emergency (10% LEL zone)
-const LPG_PPM_EXPLOSIVE    = 4500   // 25% LEL — explosive risk zone
-const LPG_PPM_IDLH         = 2000   // NIOSH Immediately Dangerous to Life/Health
-
+// ─── MQ6 thresholds ────────────────────────────────────────────────────────
+const LPG_PPM_THRESHOLD = 300
 const filterPpm = (ppm) => (ppm != null && ppm >= LPG_PPM_THRESHOLD ? ppm : null)
 const filterSeverity = (sev, ppm) => (ppm != null && ppm >= LPG_PPM_THRESHOLD ? sev : 'safe')
 
-// Classify PPM into standard safety zones
-const ppmZone = (ppm) => {
-  if (!ppm || ppm < LPG_PPM_THRESHOLD) return 'none'
-  if (ppm < LPG_PPM_MEDIUM)   return 'low'      // 300–999 ppm
-  if (ppm < LPG_PPM_HIGH)     return 'medium'   // 1000–1999 ppm
-  if (ppm < LPG_PPM_EXPLOSIVE) return 'high'    // 2000–4499 ppm
-  return 'explosive'                             // 4500+ ppm — 25% LEL
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// RULE-BASED SAFETY RECOMMENDATION ENGINE
-// Architecture: Forward-chaining production system
-//   • Knowledge Base  — RULES array (condition → action pairs)
-//   • Working Memory  — facts object assembled from all sensor data + history
-//   • Inference Engine — runEngine() matches rules to facts, sorts by priority
-//   • Conflict Resolution — priority numbering + suppression flags
-//   • Explanation Facility — every recommendation includes a 'reason' field
-// ════════════════════════════════════════════════════════════════════════════
-
-// ── PPM trend detector — compares last N readings ─────────────────────────
-const detectTrend = (ppmHistory) => {
-  const valid = (ppmHistory || []).filter(v => v != null && v > 0)
-  if (valid.length < 3) return 'unknown'
-  const recent = valid.slice(-5)
-  const first  = recent.slice(0, Math.floor(recent.length / 2))
-  const last   = recent.slice(Math.floor(recent.length / 2))
-  const avgFirst = first.reduce((a, b) => a + b, 0) / first.length
-  const avgLast  = last.reduce((a,  b) => a + b, 0) / last.length
-  const delta = avgLast - avgFirst
-  if (delta >  80) return 'rising'
-  if (delta < -80) return 'falling'
-  return 'stable'
-}
-
-// ── Gas level drop rate detector ──────────────────────────────────────────
-const detectLevelDropRate = (levelHistory) => {
-  const h = (levelHistory || []).filter(v => v != null)
-  if (h.length < 6) return null
-  const recent = h.slice(-10)
-  const drop   = recent[0] - recent[recent.length - 1]
-  // drop per reading, scaled to per-hour (readings every ~5s → 720/hr)
-  const dropPerHour = (drop / recent.length) * 720
-  return parseFloat(dropPerHour.toFixed(2))
-}
-
-// ── Time-of-day context ───────────────────────────────────────────────────
-const timeContext = () => {
-  const h = new Date().getHours()
-  if (h >= 22 || h < 5)  return 'night'
-  if (h >= 5  && h < 10) return 'morning'
-  if (h >= 10 && h < 17) return 'afternoon'
-  return 'evening'
-}
-
-// ── KNOWLEDGE BASE — all rules defined as condition-action pairs ──────────
-// Each rule: { name, priority (lower = fires first), condition(facts), recommendations[] }
-// Each recommendation: { icon, text, reason, urgent }
-const RULES = [
-
-  // ════════ PRIORITY 1 — EXPLOSIVE ZONE (≥4500 ppm, 25% LEL) ══════════════
-  {
-    name: 'EXPLOSIVE_ZONE',
-    priority: 1,
-    condition: f => f.zone === 'explosive',
-    suppressOthers: true,
-    recommendations: f => [
-      { icon: '💥', text: 'EXPLOSIVE CONCENTRATION — EVACUATE NOW', reason: `${Math.round(f.ppm)} ppm = ${((f.ppm/18000)*100).toFixed(1)}% of LEL. Explosive range begins at 25% LEL (4,500 ppm).`, urgent: true },
-      { icon: '⚡', text: 'Cut ALL power at the main breaker immediately', reason: 'Any electrical spark — including light switches — can ignite gas at this concentration.', urgent: true },
-      { icon: '🚫', text: 'Do NOT use any electrical device, phone, or torch inside', reason: 'Even a phone screen tap can create a spark sufficient for ignition at this level.', urgent: true },
-      { icon: '📞', text: 'Call emergency services from OUTSIDE the building', reason: 'Do not make calls from inside. Move at least 50 metres away before calling.', urgent: true },
-      { icon: '🚷', text: 'Do not re-enter until emergency services clear the area', reason: 'Concentration may be uneven — some zones may still be in explosive range.', urgent: true },
-    ]
-  },
-
-  // ════════ PRIORITY 2 — HIGH / IDLH ZONE (2000–4499 ppm) ════════════════
-  {
-    name: 'HIGH_EMERGENCY',
-    priority: 2,
-    condition: f => f.zone === 'high',
-    suppressOthers: true,
-    recommendations: f => [
-      { icon: '🚨', text: 'DANGEROUS GAS LEVEL — Evacuate immediately', reason: `${Math.round(f.ppm)} ppm exceeds the NIOSH IDLH threshold of 2,000 ppm. Prolonged exposure is life-threatening.`, urgent: true },
-      { icon: '⚡', text: 'Cut electrical power at the mains before leaving', reason: 'Electrical equipment is an ignition source. Shut the mains breaker as you exit.', urgent: true },
-      { icon: '🚫', text: 'Do NOT operate switches, lighters, or appliances', reason: 'Any ignition source including friction, sparks, or naked flame is dangerous at this level.', urgent: true },
-      { icon: '🪟', text: 'Open doors and windows only if on your exit path', reason: 'Ventilate as you evacuate — do not stay to open windows.', urgent: true },
-      { icon: '📞', text: 'Call Uganda Fire Brigade: 0800 199 499 from outside', reason: 'Report a gas emergency. Do not re-enter without professional clearance.', urgent: false },
-      ...(f.isNight ? [{ icon: '🌙', text: 'Wake all occupants immediately — do not assume they can smell the gas', reason: 'Gas concentration can build while people sleep. LPG is heavier than air and settles near the floor where sleeping occupants may be.', urgent: true }] : []),
-    ]
-  },
-
-  // ════════ PRIORITY 3 — MEDIUM ZONE (1000–1999 ppm) ══════════════════════
-  {
-    name: 'MEDIUM_LEAK',
-    priority: 3,
-    condition: f => f.zone === 'medium',
-    suppressOthers: true,
-    recommendations: f => [
-      { icon: '⚠️', text: 'Significant gas leak detected — leave the room now', reason: `${Math.round(f.ppm)} ppm is a significant LPG concentration (threshold for room evacuation is 1,000 ppm).`, urgent: true },
-      { icon: '🪟', text: 'Open all windows and external doors immediately', reason: 'Maximum ventilation must be established to dilute concentration below 300 ppm before re-entry.', urgent: true },
-      { icon: '🔥', text: 'Extinguish ALL flames — stove, candles, mosquito coils', reason: 'Any naked flame is a potential ignition source at this concentration level.', urgent: true },
-      { icon: '🔍', text: 'Locate the source — check cylinder valve, regulator, hose', reason: 'Common leak points are the regulator seal, hose joints, and the cylinder valve thread.', urgent: false },
-      { icon: '⚡', text: 'Turn off cylinder valve if you can do so without entering the room', reason: 'Stopping the source is the most effective action if it can be done safely from outside.', urgent: false },
-      ...(f.trend === 'rising' ? [{ icon: '📈', text: 'Concentration is still rising — do not re-enter', reason: 'PPM trend is upward across recent readings. The leak has not been stopped.', urgent: true }] : []),
-    ]
-  },
-
-  // ════════ PRIORITY 4 — LOW ZONE WITH RISING TREND (300–999, rising) ═════
-  {
-    name: 'LOW_LEAK_RISING',
-    priority: 4,
-    condition: f => f.zone === 'low' && f.trend === 'rising',
-    suppressOthers: false,
-    recommendations: f => [
-      { icon: '📈', text: 'Gas concentration is rising — act now before it escalates', reason: `Currently ${Math.round(f.ppm)} ppm and trending upward. If the rise continues, it will reach the 1,000 ppm evacuation threshold.`, urgent: true },
-      { icon: '🪟', text: 'Open windows and doors for maximum ventilation immediately', reason: 'Diluting the concentration now prevents escalation to a higher danger zone.', urgent: true },
-      { icon: '🔍', text: 'Inspect cylinder valve, regulator, and all hose connections', reason: 'A slow leak at a joint or valve seal will cause a steady PPM rise exactly like this pattern.', urgent: true },
-      { icon: '🔥', text: 'Remove all ignition sources from the area', reason: 'Even at low concentrations, a rising trend means increasing risk. Remove flames as a precaution.', urgent: false },
-    ]
-  },
-
-  // ════════ PRIORITY 5 — LOW ZONE STABLE (300–999 ppm, stable/falling) ════
-  {
-    name: 'LOW_LEAK_STABLE',
-    priority: 5,
-    condition: f => f.zone === 'low' && f.trend !== 'rising',
-    suppressOthers: false,
-    recommendations: f => [
-      { icon: '⚠️', text: 'Trace LPG detected — ventilate the area', reason: `${Math.round(f.ppm)} ppm is above the MQ6 detection threshold of 300 ppm. This is a low-level trace that requires attention.`, urgent: true },
-      { icon: '🪟', text: 'Open windows and doors to ventilate', reason: 'Even at this level, accumulated gas in an enclosed space is a fire hazard.', urgent: false },
-      { icon: '🔍', text: 'Check cylinder valve, regulator, and hose for slow leaks', reason: 'Trace readings at this level are commonly caused by a weeping regulator seal or loose hose fitting.', urgent: false },
-      { icon: '🚭', text: 'No flames or smoking in the area until readings clear', reason: 'LPG is flammable at concentrations above 1.8% vol (18,000 ppm) but fire hazard from accumulated pockets exists at lower levels.', urgent: false },
-      ...(f.trend === 'falling' ? [{ icon: '📉', text: 'Concentration is falling — ventilation is working', reason: 'Keep windows open until readings drop below 300 ppm and remain stable.', urgent: false }] : []),
-    ]
-  },
-
-  // ════════ PRIORITY 6 — COMPOUND: LEAK + CRITICALLY LOW GAS ══════════════
-  {
-    name: 'LEAK_AND_LOW_GAS',
-    priority: 6,
-    condition: f => f.zone !== 'none' && f.gasLevel < 20,
-    suppressOthers: false,
-    recommendations: f => [
-      { icon: '🔴', text: 'Double hazard — active leak AND critically low cylinder', reason: `Gas at ${Math.round(f.gasLevel)}% with ${Math.round(f.ppm)} ppm detected. A leaking nearly-empty cylinder is unstable and must be addressed immediately.`, urgent: true },
-      { icon: '🔒', text: 'Close the cylinder valve completely', reason: 'Stopping flow from a nearly-empty leaking cylinder prevents the remaining gas from escaping uncontrolled.', urgent: true },
-      { icon: '📦', text: 'Do not attempt to refill — replace the cylinder entirely', reason: 'A cylinder that leaks at low fill levels may have a faulty valve body that worsens with pressure changes during refilling.', urgent: false },
-    ]
-  },
-
-  // ════════ PRIORITY 7 — REPEATED LEAK PATTERN (3+ events in 24h) ══════════
-  {
-    name: 'REPEATED_LEAKS',
-    priority: 7,
-    condition: f => f.leaksLast24h >= 3 && f.zone === 'none',
-    suppressOthers: false,
-    recommendations: f => [
-      { icon: '🔁', text: `${f.leaksLast24h} leak events detected in the last 24 hours`, reason: 'Recurring leaks indicate a persistent fault — likely a worn regulator diaphragm, loose hose fitting, or faulty cylinder valve.', urgent: true },
-      { icon: '🔧', text: 'Contact a certified gas technician for inspection', reason: 'Intermittent leaks that self-resolve are a sign of mechanical failure, not random events. Do not continue using the system without professional inspection.', urgent: true },
-      { icon: '📋', text: 'Log the times of each leak event for the technician', reason: 'A pattern of timing (e.g. when burner is lit, or when cylinder is moved) helps diagnose the fault source.', urgent: false },
-    ]
-  },
-
-  // ════════ PRIORITY 8 — ABNORMAL GAS DROP RATE (no leak detected) ════════
-  {
-    name: 'FAST_LEVEL_DROP',
-    priority: 8,
-    condition: f => f.dropRatePerHour !== null && f.dropRatePerHour > 5 && f.zone === 'none',
-    suppressOthers: false,
-    recommendations: f => [
-      { icon: '📉', text: 'Gas level dropping faster than normal cooking rate', reason: `Level is falling at ~${f.dropRatePerHour.toFixed(1)}% per hour. Normal cooking consumption is 1–2% per hour. MQ6 may not yet detect a slow leak.`, urgent: true },
-      { icon: '🔍', text: 'Inspect all connections — MQ6 may be detecting below its threshold', reason: 'Slow leaks from micro-cracks or loose fittings can cause fast weight loss before PPM rises above 300 ppm.', urgent: true },
-      { icon: '🪟', text: 'Ventilate as a precaution', reason: 'Gas may be accumulating in low-lying areas before the sensor detects it. LPG is heavier than air.', urgent: false },
-    ]
-  },
-
-  // ════════ PRIORITY 9 — COOKING MODE OVERRIDE (extreme PPM while cooking) ═
-  {
-    name: 'COOKING_MODE_OVERRIDE',
-    priority: 9,
-    condition: f => f.cookingMode && f.rawPpm >= LPG_PPM_MEDIUM,
-    suppressOthers: true,
-    recommendations: f => [
-      { icon: '🍳', text: 'Cooking Mode is ON but concentration is too high to suppress', reason: `${Math.round(f.rawPpm)} ppm exceeds 1,000 ppm — this is beyond normal cooking fumes. This alarm is NOT suppressed by cooking mode.`, urgent: true },
-      { icon: '🔥', text: 'Turn off stove immediately and check for gas escape', reason: 'Cooking mode suppresses alerts up to 999 ppm. Above that threshold, a real leak must be assumed.', urgent: true },
-      { icon: '🪟', text: 'Ventilate the kitchen immediately', reason: 'Open all windows and the back door to create a cross-draught.', urgent: true },
-    ]
-  },
-
-  // ════════ PRIORITY 10 — CRITICALLY LOW GAS (no leak) ════════════════════
-  {
-    name: 'CRITICALLY_LOW_GAS',
-    priority: 10,
-    condition: f => f.gasLevel < 20 && f.zone === 'none',
-    suppressOthers: false,
-    recommendations: f => [
-      { icon: '📦', text: `Cylinder at ${Math.round(f.gasLevel)}% — arrange refill urgently`, reason: `At current usage rate, approximately ${f.estDays} day${f.estDays !== 1 ? 's' : ''} of gas remaining. Below 20% is the critical refill zone.`, urgent: true },
-      { icon: '📋', text: 'Contact your gas supplier today', reason: 'Do not wait until the cylinder is completely empty — the last 10% is difficult to use and delivery may take 1–2 days.', urgent: false },
-      { icon: '🌙', text: f.isNight ? 'Arrange refill first thing tomorrow morning' : 'Do not delay — arrange today', reason: f.isNight ? 'Suppliers open in the morning. Ration usage tonight.' : 'Gas suppliers in Uganda typically deliver same day if contacted before noon.', urgent: false },
-    ]
-  },
-
-  // ════════ PRIORITY 11 — LOW GAS WARNING (20–40%) ═════════════════════════
-  {
-    name: 'LOW_GAS_WARNING',
-    priority: 11,
-    condition: f => f.gasLevel >= 20 && f.gasLevel < 40 && f.zone === 'none',
-    suppressOthers: false,
-    recommendations: f => [
-      { icon: '📦', text: `Cylinder at ${Math.round(f.gasLevel)}% — schedule refill this week`, reason: `At current consumption rate, approximately ${f.estDays} days remaining. Plan ahead to avoid running out mid-cooking.`, urgent: false },
-      { icon: '📊', text: 'Check the Analytics tab for your 7-day usage pattern', reason: 'Your weekly consumption chart shows which days you use the most gas, helping you plan the best refill day.', urgent: false },
-    ]
-  },
-
-  // ════════ PRIORITY 12 — COOKING MODE REMINDER (running long) ═════════════
-  {
-    name: 'COOKING_MODE_LONG',
-    priority: 12,
-    condition: f => f.cookingMode && f.cookingMinutes !== null && f.cookingMinutes >= 90,
-    suppressOthers: false,
-    recommendations: f => [
-      { icon: '🍳', text: `Cooking Mode has been active for ${f.cookingMinutes} minutes`, reason: 'Cooking Mode auto-disables after 2 hours. MQ6 monitoring will resume automatically when it switches off.', urgent: false },
-      { icon: '⏱️', text: `MQ6 alerts will resume in ~${120 - f.cookingMinutes} minutes`, reason: 'If cooking is finished, tap Cooking Mode in the header to re-enable leak detection immediately.', urgent: false },
-    ]
-  },
-
-  // ════════ PRIORITY 13 — ALL NORMAL ═══════════════════════════════════════
-  {
-    name: 'ALL_NORMAL',
-    priority: 13,
-    condition: f => f.zone === 'none' && f.gasLevel >= 40,
-    suppressOthers: false,
-    recommendations: f => [
-      { icon: '✅', text: 'System operating normally — all readings safe', reason: `Gas level at ${Math.round(f.gasLevel)}%. No LPG detected above threshold. All sensors active.`, urgent: false },
-      { icon: '🔍', text: 'Routine check: inspect hose and regulator monthly', reason: 'Even without active leaks, rubber hoses degrade over time. Visual inspection prevents slow leaks from developing.', urgent: false },
-      { icon: '📊', text: `Estimated ${f.estDays} days of gas remaining at current usage`, reason: 'Based on your cylinder size and current weight reading.', urgent: false },
-    ]
-  },
-]
-
-// ── INFERENCE ENGINE — forward chaining ──────────────────────────────────
-const runEngine = (facts) => {
-  // 1. Match all rules whose conditions are true
-  const fired = RULES.filter(r => {
-    try { return r.condition(facts) } catch (_) { return false }
-  })
-
-  if (fired.length === 0) return RULES.find(r => r.name === 'ALL_NORMAL')
-    .recommendations(facts)
-
-  // 2. Sort by priority (lowest number = highest priority)
-  fired.sort((a, b) => a.priority - b.priority)
-
-  // 3. Conflict resolution — if highest priority rule suppresses others, use only it
-  if (fired[0].suppressOthers) {
-    return fired[0].recommendations(facts).slice(0, 6)
-  }
-
-  // 4. Otherwise merge recommendations from all fired rules, up to 6 total
-  const merged = []
-  for (const rule of fired) {
-    const recs = rule.recommendations(facts)
-    for (const rec of recs) {
-      if (merged.length < 6) merged.push(rec)
-    }
-  }
-  return merged
-}
-
-// ── PUBLIC API — called from App component ────────────────────────────────
-const getRecommendations = (severity, gasLevel, ppm, extras = {}) => {
-  const {
-    ppmHistory    = [],
-    levelHistory  = [],
-    alerts        = [],
-    cookingMode   = false,
-    cookingStart  = null,
-    rawPpm        = null,
-    estDays       = 0,
-  } = extras
-
-  const now          = Date.now()
-  const tod          = timeContext()
-  const zone         = ppmZone(ppm || rawPpm)
-  const trend        = detectTrend(ppmHistory)
-  const dropRate     = detectLevelDropRate(levelHistory)
-  const leaksLast24h = alerts.filter(a =>
-    a.severity !== 'safe' && (now - new Date(a.timestamp || 0).getTime()) < 86400000
-  ).length
-  const cookingMinutes = (cookingMode && cookingStart)
-    ? Math.floor((now - cookingStart) / 60000)
-    : null
-
-  // ── Working Memory (facts object) ──
-  const facts = {
-    severity,
-    gasLevel:        gasLevel   ?? 0,
-    ppm:             ppm        ?? 0,
-    rawPpm:          rawPpm     ?? ppm ?? 0,
-    zone,
-    trend,
-    dropRatePerHour: dropRate,
-    leaksLast24h,
-    cookingMode,
-    cookingMinutes,
-    isNight:         tod === 'night',
-    isMorning:       tod === 'morning',
-    timeOfDay:       tod,
-    estDays,
-    ppmZoneLabel: zone === 'explosive' ? '≥4,500 ppm (25% LEL — EXPLOSIVE ZONE)'
-                : zone === 'high'      ? '2,000–4,499 ppm (IDLH threshold)'
-                : zone === 'medium'    ? '1,000–1,999 ppm (significant leak)'
-                : zone === 'low'       ? '300–999 ppm (trace detectable)'
-                : 'Below detection threshold',
-  }
-
-  return runEngine(facts)
+// ─── Safety recommendations ────────────────────────────────────────────────
+const getRecommendations = (severity, level, ppm) => {
+  if (severity === 'high') return [
+    { icon: '🚨', text: 'EVACUATE immediately — do not delay', urgent: true },
+    { icon: '⚡', text: 'Cut all electrical power at the mains', urgent: true },
+    { icon: '🚫', text: 'Do NOT operate switches or appliances', urgent: true },
+    { icon: '📞', text: 'Call emergency services immediately', urgent: false },
+    { icon: '🪟', text: 'Open all windows and doors if safe', urgent: false },
+    ppm && ppm > 800
+      ? { icon: '☣️', text: `Extremely high: ~${Math.round(ppm)} ppm — stay clear`, urgent: true }
+      : { icon: '📊', text: `MQ6 reading ~${ppm ? Math.round(ppm) : '—'} ppm`, urgent: false },
+  ]
+  if (severity === 'low') return [
+    { icon: '⚠️', text: 'Ventilate now — open windows', urgent: true },
+    { icon: '🔍', text: 'Inspect cylinder valve and connections', urgent: false },
+    { icon: '🚭', text: 'No flames or ignition sources nearby', urgent: false },
+    { icon: '👁️', text: 'Monitor MQ6 readings closely', urgent: false },
+    ppm ? { icon: '📊', text: `Current MQ6: ~${Math.round(ppm)} ppm`, urgent: false }
+        : { icon: '📊', text: 'Track PPM trend in Analytics', urgent: false },
+  ]
+  if (level < 20) return [
+    { icon: '📦', text: 'Cylinder critically low — arrange refill', urgent: true },
+    { icon: '📋', text: 'Contact your gas supplier today', urgent: false },
+    { icon: '🕐', text: 'Less than a week of gas remaining', urgent: false },
+  ]
+  if (level < 40) return [
+    { icon: '📦', text: 'Below 40% — schedule refill this week', urgent: false },
+    { icon: '📊', text: 'Track usage in the Analytics tab', urgent: false },
+  ]
+  return [
+    { icon: '✅', text: 'System operating normally', urgent: false },
+    { icon: '🔍', text: 'Routine monthly inspection due', urgent: false },
+  ]
 }
 
 // ─── Color tokens ──────────────────────────────────────────────────────────
@@ -912,15 +610,7 @@ export default function App() {
   const displayPpm    = cookingMode ? null : currentPpm
   const sCol          = cookingMode ? C.safe : C[severity]
   const lCol          = levelColor(gasLevel)
-  const rules         = getRecommendations(displaySev, gasLevel, displayPpm, {
-    ppmHistory,
-    levelHistory,
-    alerts,
-    cookingMode,
-    cookingStart,
-    rawPpm:   currentPpm,
-    estDays,
-  })
+  const rules         = getRecommendations(displaySev, gasLevel, displayPpm)
   const estDays       = gasLevel > 0 ? Math.max(0, Math.ceil(gasLevel / 2.1)) : 0
   const nonSafeAlerts = alerts.filter(a => a.severity !== 'safe')
 
@@ -1206,17 +896,10 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
               border: `1px solid ${r.urgent ? sCol.border : 'var(--border)'}`,
               display: 'flex', alignItems: 'flex-start', gap: 10,
             }}>
-              <span style={{ fontSize: 15, flexShrink: 0, marginTop: 1 }}>{r.icon}</span>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, lineHeight: 1.5, color: r.urgent ? sCol.main : 'var(--text-2)', fontWeight: r.urgent ? 600 : 400 }}>
-                  {r.text}
-                </div>
-                {r.reason && (
-                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', marginTop: 4, lineHeight: 1.6 }}>
-                    {r.reason}
-                  </div>
-                )}
-              </div>
+              <span style={{ fontSize: 15, flexShrink: 0 }}>{r.icon}</span>
+              <span style={{ fontFamily: 'var(--font-body)', fontSize: 13, lineHeight: 1.5, color: r.urgent ? sCol.main : 'var(--text-2)', fontWeight: r.urgent ? 600 : 400 }}>
+                {r.text}
+              </span>
             </div>
           ))}
         </div>
