@@ -91,7 +91,7 @@ const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 const fmtTime = d => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 const fmtDate = d => new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric' })
 
-// ─── Shared UI primitives (unchanged) ──────────────────────────────────────
+// ─── Shared UI primitives ──────────────────────────────────────────────────────
 function StatusDot({ online }) {
   return (
     <span style={{
@@ -181,7 +181,7 @@ function ArcGauge({ value, color, size = 160 }) {
   )
 }
 
-// ─── PPM bar (unchanged) ───────────────────────────────────────────────────
+// ─── Enhanced PPM bar with values ───────────────────────────────────────────────────
 function PpmBar({ ppm }) {
   const MAX = 1000
   const displayPpm = filterPpm(ppm)
@@ -205,7 +205,281 @@ function PpmBar({ ppm }) {
   )
 }
 
-// ─── Sparkline (unchanged) ────────────────────────────────────────────────
+// ─── Enhanced BarChart with Y-axis and values ─────────────────────────────
+function BarChart({ data, color, showValues = true, yAxisLabel = '' }) {
+  if (!data || data.length === 0) return (
+    <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>No data yet</div>
+  )
+  
+  const max = Math.max(...data.map(d => d.value), 1)
+  const barAreaHeight = 100
+  const yAxisWidth = 40
+  
+  // Calculate Y-axis ticks
+  const yTicks = [0, Math.round(max * 0.25), Math.round(max * 0.5), Math.round(max * 0.75), max]
+  
+  return (
+    <div style={{ width: '100%' }}>
+      <div style={{ display: 'flex', gap: 8 }}>
+        {/* Y-axis labels */}
+        <div style={{ 
+          width: yAxisWidth, 
+          display: 'flex', 
+          flexDirection: 'column', 
+          justifyContent: 'space-between',
+          height: barAreaHeight,
+          paddingRight: 8,
+          borderRight: '1px solid var(--border)',
+          marginRight: 8
+        }}>
+          {yTicks.slice().reverse().map((tick, i) => (
+            <div key={i} style={{ 
+              fontFamily: 'var(--font-mono)', 
+              fontSize: 10, 
+              color: 'var(--text-3)',
+              textAlign: 'right',
+              lineHeight: 1
+            }}>
+              {tick}
+            </div>
+          ))}
+        </div>
+        
+        {/* Bars container */}
+        <div style={{ flex: 1 }}>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'flex-end', 
+            gap: 6, 
+            height: barAreaHeight, 
+            width: '100%',
+            borderBottom: '1px solid var(--border)'
+          }}>
+            {data.map((d, i) => (
+              <div key={i} style={{ 
+                flex: 1, 
+                display: 'flex', 
+                flexDirection: 'column', 
+                alignItems: 'center', 
+                gap: 4, 
+                height: '100%', 
+                justifyContent: 'flex-end', 
+                minWidth: 0 
+              }}>
+                <div style={{ 
+                  width: '100%', 
+                  borderRadius: '3px 3px 0 0', 
+                  height: `${(d.value / max) * (barAreaHeight - 20)}px`, 
+                  minHeight: d.value > 0 ? 3 : 0, 
+                  background: color, 
+                  opacity: d.value > 0 ? 1 : 0.15, 
+                  transition: 'height 0.6s cubic-bezier(.4,0,.2,1)',
+                  position: 'relative',
+                }}>
+                  {/* Value label on top of bar */}
+                  {showValues && d.value > 0 && (
+                    <div style={{
+                      position: 'absolute',
+                      top: -20,
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 9,
+                      color: color,
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                      background: 'rgba(0,0,0,0.7)',
+                      padding: '2px 5px',
+                      borderRadius: 4,
+                      pointerEvents: 'none',
+                    }}>
+                      {d.value}
+                    </div>
+                  )}
+                </div>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)' }}>{d.label}</span>
+              </div>
+            ))}
+          </div>
+          {yAxisLabel && (
+            <div style={{ 
+              textAlign: 'center', 
+              marginTop: 8, 
+              fontFamily: 'var(--font-mono)', 
+              fontSize: 9, 
+              color: 'var(--text-3)' 
+            }}>
+              {yAxisLabel}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Enhanced DualBarChart with Y-axis and values ─────────────────────────
+function DualBarChart({ data, showValues = true }) {
+  if (!data || data.length === 0) return (
+    <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>No data yet</div>
+  )
+  
+  const max = Math.max(...data.map(d => Math.max(d.high, d.low)), 1)
+  const barAreaHeight = 100
+  const yAxisWidth = 40
+  
+  // Calculate Y-axis ticks
+  const yTicks = [0, Math.round(max * 0.25), Math.round(max * 0.5), Math.round(max * 0.75), max]
+  
+  return (
+    <div style={{ width: '100%' }}>
+      <div style={{ display: 'flex', gap: 8 }}>
+        {/* Y-axis labels */}
+        <div style={{ 
+          width: yAxisWidth, 
+          display: 'flex', 
+          flexDirection: 'column', 
+          justifyContent: 'space-between',
+          height: barAreaHeight,
+          paddingRight: 8,
+          borderRight: '1px solid var(--border)',
+          marginRight: 8
+        }}>
+          {yTicks.slice().reverse().map((tick, i) => (
+            <div key={i} style={{ 
+              fontFamily: 'var(--font-mono)', 
+              fontSize: 10, 
+              color: 'var(--text-3)',
+              textAlign: 'right',
+              lineHeight: 1
+            }}>
+              {tick}
+            </div>
+          ))}
+        </div>
+        
+        {/* Bars container */}
+        <div style={{ flex: 1 }}>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'flex-end', 
+            gap: 6, 
+            height: barAreaHeight, 
+            width: '100%',
+            borderBottom: '1px solid var(--border)'
+          }}>
+            {data.map((d, i) => {
+              const maxBarHeight = Math.max(d.high, d.low)
+              const barHeightPercent = (maxBarHeight / max) * (barAreaHeight - 20)
+              
+              return (
+                <div key={i} style={{ 
+                  flex: 1, 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  alignItems: 'center', 
+                  gap: 4, 
+                  height: '100%', 
+                  justifyContent: 'flex-end', 
+                  minWidth: 0 
+                }}>
+                  <div style={{ 
+                    width: '100%', 
+                    display: 'flex', 
+                    gap: 3, 
+                    alignItems: 'flex-end', 
+                    justifyContent: 'center',
+                    height: barHeightPercent,
+                    minHeight: (d.high > 0 || d.low > 0) ? 3 : 0,
+                  }}>
+                    {/* High bar (red) */}
+                    <div style={{ 
+                      flex: 1, 
+                      borderRadius: '2px 2px 0 0', 
+                      height: maxBarHeight > 0 ? `${(d.high / maxBarHeight) * 100}%` : '0%',
+                      minHeight: d.high > 0 ? 3 : 0,
+                      background: '#ff4560', 
+                      opacity: d.high > 0 ? 1 : 0.12,
+                      position: 'relative',
+                      transition: 'height 0.6s cubic-bezier(.4,0,.2,1)'
+                    }}>
+                      {showValues && d.high > 0 && (
+                        <div style={{
+                          position: 'absolute',
+                          top: -20,
+                          left: '50%',
+                          transform: 'translateX(-50%)',
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: 8,
+                          color: '#ff4560',
+                          fontWeight: 600,
+                          whiteSpace: 'nowrap',
+                          background: 'rgba(0,0,0,0.7)',
+                          padding: '2px 4px',
+                          borderRadius: 4,
+                          pointerEvents: 'none',
+                        }}>
+                          {d.high}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Low bar (orange) */}
+                    <div style={{ 
+                      flex: 1, 
+                      borderRadius: '2px 2px 0 0', 
+                      height: maxBarHeight > 0 ? `${(d.low / maxBarHeight) * 100}%` : '0%',
+                      minHeight: d.low > 0 ? 3 : 0,
+                      background: '#ffb020', 
+                      opacity: d.low > 0 ? 1 : 0.12,
+                      position: 'relative',
+                      transition: 'height 0.6s cubic-bezier(.4,0,.2,1)'
+                    }}>
+                      {showValues && d.low > 0 && (
+                        <div style={{
+                          position: 'absolute',
+                          top: -20,
+                          left: '50%',
+                          transform: 'translateX(-50%)',
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: 8,
+                          color: '#ffb020',
+                          fontWeight: 600,
+                          whiteSpace: 'nowrap',
+                          background: 'rgba(0,0,0,0.7)',
+                          padding: '2px 4px',
+                          borderRadius: 4,
+                          pointerEvents: 'none',
+                        }}>
+                          {d.low}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)' }}>{d.label}</span>
+                </div>
+              )
+            })}
+          </div>
+          
+          {/* Legend */}
+          <div style={{ display: 'flex', gap: 16, marginTop: 12, justifyContent: 'center' }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ width: 12, height: 12, background: '#ff4560', borderRadius: 2 }}></span>
+              High Leaks
+            </span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ width: 12, height: 12, background: '#ffb020', borderRadius: 2 }}></span>
+              Low Leaks
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Sparkline ────────────────────────────────────────────────────────────────
 function Sparkline({ data, color, height = 40 }) {
   if (!data || data.length < 2) return null
   const w = 200, h = height, pad = 4
@@ -227,46 +501,7 @@ function Sparkline({ data, color, height = 40 }) {
   )
 }
 
-// ─── BarChart (unchanged) ──────────────────────────────────────────────────
-function BarChart({ data, color }) {
-  if (!data || data.length === 0) return (
-    <div style={{ height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>No data yet</div>
-  )
-  const max = Math.max(...data.map(d => d.value), 1)
-  return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 80, width: '100%' }}>
-      {data.map((d, i) => (
-        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end', minWidth: 0 }}>
-          <div style={{ width: '100%', borderRadius: '3px 3px 0 0', height: `${(d.value / max) * 64}px`, minHeight: d.value > 0 ? 3 : 0, background: color, opacity: d.value > 0 ? 1 : 0.15, transition: 'height 0.6s cubic-bezier(.4,0,.2,1)' }} />
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)' }}>{d.label}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ─── DualBarChart (unchanged) ──────────────────────────────────────────────
-function DualBarChart({ data }) {
-  if (!data || data.length === 0) return (
-    <div style={{ height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>No data yet</div>
-  )
-  const max = Math.max(...data.map(d => Math.max(d.high, d.low)), 1)
-  return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 80, width: '100%' }}>
-      {data.map((d, i) => (
-        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end', minWidth: 0 }}>
-          <div style={{ width: '100%', display: 'flex', gap: 2, alignItems: 'flex-end', justifyContent: 'center' }}>
-            <div style={{ flex: 1, borderRadius: '2px 2px 0 0', height: `${(d.high / max) * 60}px`, minHeight: d.high > 0 ? 3 : 0, background: '#ff4560', opacity: d.high > 0 ? 1 : 0.12 }} />
-            <div style={{ flex: 1, borderRadius: '2px 2px 0 0', height: `${(d.low / max) * 60}px`, minHeight: d.low > 0 ? 3 : 0, background: '#ffb020', opacity: d.low > 0 ? 1 : 0.12 }} />
-          </div>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)' }}>{d.label}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ─── Cylinder Selector (unchanged) ─────────────────────────────────────────
+// ─── Cylinder Selector ─────────────────────────────────────────────────────────
 function CylinderSelector({ selectedId, onChange }) {
   return (
     <div>
@@ -301,7 +536,7 @@ function CylinderSelector({ selectedId, onChange }) {
   )
 }
 
-// ─── Cooking Mode Toggle (unchanged) ───────────────────────────────────────
+// ─── Cooking Mode Toggle ───────────────────────────────────────────────────────
 function CookingModeToggle({ active, onToggle }) {
   return (
     <button onClick={onToggle} title={active ? 'Cooking Mode ON — tap to disable' : 'Pause MQ6 alerts while cooking'} style={{
@@ -319,7 +554,7 @@ function CookingModeToggle({ active, onToggle }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// MAIN APP — FIXED VERSION
+// MAIN APP
 // ══════════════════════════════════════════════════════════════════════════
 export default function App() {
   const [tab, setTab]                            = useState('dashboard')
@@ -577,30 +812,34 @@ export default function App() {
     init()
 
     // Realtime subscription
-    levelCh = supabase.channel('rt-levels')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gas_levels' }, p => {
-        const w = Number(p.new.weight_grams)
-        const pr = cylinderPresetRef.current
-        const ct = customTareRef.current
-        
-        setRawWeightG(w)
-        setLastSeen(new Date(p.new.created_at))
-        setConnected(true)
-        setLevelHistory(prev => [...prev.slice(-59), weightToPercent(w, pr, ct)])
-      })
-      .subscribe()
+    if (supabase) {
+      levelCh = supabase.channel('rt-levels')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gas_levels' }, p => {
+          const w = Number(p.new.weight_grams)
+          const pr = cylinderPresetRef.current
+          const ct = customTareRef.current
+          
+          setRawWeightG(w)
+          setLastSeen(new Date(p.new.created_at))
+          setConnected(true)
+          setLevelHistory(prev => [...prev.slice(-59), weightToPercent(w, pr, ct)])
+        })
+        .subscribe()
 
-    leakCh = supabase.channel('rt-leakages')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gas_leakages' }, p => {
-        const { severity: sev, id, created_at, ppm_approx, raw_value } = p.new
-        handleLeakEvent(sev, id, created_at, ppm_approx, raw_value)
-        setConnected(true)
-      })
-      .subscribe()
+      leakCh = supabase.channel('rt-leakages')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gas_leakages' }, p => {
+          const { severity: sev, id, created_at, ppm_approx, raw_value } = p.new
+          handleLeakEvent(sev, id, created_at, ppm_approx, raw_value)
+          setConnected(true)
+        })
+        .subscribe()
+    }
 
     return () => {
-      supabase.removeChannel(levelCh)
-      supabase.removeChannel(leakCh)
+      if (supabase) {
+        if (levelCh) supabase.removeChannel(levelCh)
+        if (leakCh) supabase.removeChannel(leakCh)
+      }
       clearInterval(alarmTimer.current)
     }
   }, [demoMode, handleLeakEvent, playAlarm])
@@ -628,13 +867,10 @@ export default function App() {
     </div>
   )
 
-  const bannerCount = (cookingMode ? 1 : 0) + (alarmBanner && !cookingMode ? 1 : 0)
-  const bannerH = bannerCount * 56
-
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
 
-      {/* ── HEADER (unchanged) ─────────────────────────────────────────────── */}
+      {/* ── HEADER ─────────────────────────────────────────────── */}
       <header style={{
         position: 'sticky', top: 0, zIndex: 200,
         background: 'rgba(10,14,26,0.92)', backdropFilter: 'blur(16px)',
@@ -665,7 +901,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* ── COOKING MODE BANNER (unchanged) ─────────────────────────────────── */}
+      {/* ── COOKING MODE BANNER ─────────────────────────────────── */}
       {cookingMode && (
         <div className="slide-down" style={{
           position: 'sticky', top: 56, zIndex: 190,
@@ -683,7 +919,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── ALARM BANNER (unchanged) ────────────────────────────────────────── */}
+      {/* ── ALARM BANNER ────────────────────────────────────────── */}
       {alarmBanner && !cookingMode && (
         <div className="slide-down" style={{
           position: 'sticky', top: cookingMode ? 112 : 56, zIndex: 190,
@@ -708,7 +944,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ─── DESKTOP TAB NAV (unchanged) ─────────────────────────────────────── */}
+      {/* ─── DESKTOP TAB NAV ─────────────────────────────────────── */}
       <nav id="desktop-nav" style={{
         background: 'rgba(10,14,26,0.8)', backdropFilter: 'blur(12px)',
         borderBottom: '1px solid var(--border)',
@@ -733,7 +969,7 @@ export default function App() {
         ))}
       </nav>
 
-      {/* ── MAIN CONTENT (unchanged) ────────────────────────────────────────── */}
+      {/* ── MAIN CONTENT ────────────────────────────────────────── */}
       <main id="main-content" className="fade-up" style={{ flex: 1, padding: '16px', maxWidth: 960, width: '100%', margin: '0 auto', minWidth: 0, overflowX: 'hidden' }}>
 
         {tab === 'dashboard' && (
@@ -780,7 +1016,7 @@ export default function App() {
         )}
       </main>
 
-      {/* ── MOBILE BOTTOM NAV (unchanged) ───────────────────────────────────── */}
+      {/* ── MOBILE BOTTOM NAV ───────────────────────────────────── */}
       <nav id="mobile-nav" style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
         background: 'rgba(10,14,26,0.97)', backdropFilter: 'blur(16px)',
@@ -814,7 +1050,7 @@ export default function App() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// DASHBOARD TAB (unchanged)
+// DASHBOARD TAB
 // ══════════════════════════════════════════════════════════════════════════
 function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory, severity, displaySev, displayPpm, currentPpm, sCol, ppmHistory, cookingMode, estDays, totalLeaks, rules }) {
   return (
@@ -896,7 +1132,7 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
               border: `1px solid ${r.urgent ? sCol.border : 'var(--border)'}`,
               display: 'flex', alignItems: 'flex-start', gap: 10,
             }}>
-              <span style={{ fontSize: 15, flexShrink: 0 }}>{r.icon}</span>
+              <span style={{ fontSize: 15, flexShrink: 0, marginTop: 1 }}>{r.icon}</span>
               <span style={{ fontFamily: 'var(--font-body)', fontSize: 13, lineHeight: 1.5, color: r.urgent ? sCol.main : 'var(--text-2)', fontWeight: r.urgent ? 600 : 400 }}>
                 {r.text}
               </span>
@@ -909,7 +1145,7 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// ALERTS TAB (unchanged)
+// ALERTS TAB
 // ══════════════════════════════════════════════════════════════════════════
 function AlertsTab({ nonSafeAlerts, setAlerts }) {
   return (
@@ -918,7 +1154,7 @@ function AlertsTab({ nonSafeAlerts, setAlerts }) {
         <div>
           <SectionTitle style={{ marginBottom: 4 }}>Alert History · MQ6</SectionTitle>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>
-            {nonSafeAlerts.length} leak event{nonSafeAlerts.length !== 1 ? 's' : ''} · ≥{LPG_PPM_THRESHOLD} ppm only
+            {nonSafeAlerts.length} leak event{nonSafeAlerts.length !== 1 ? 's' : ''} · ≥300 ppm only
           </div>
         </div>
         <button onClick={() => setAlerts([])} style={{ padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text-2)', flexShrink: 0 }}>
@@ -929,7 +1165,7 @@ function AlertsTab({ nonSafeAlerts, setAlerts }) {
         <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-3)' }}>
           <div style={{ fontSize: 36, marginBottom: 10 }}>🛡️</div>
           <div style={{ fontFamily: 'var(--font-body)', fontSize: 14, marginBottom: 4 }}>No leakage events recorded</div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>All MQ6 readings below {LPG_PPM_THRESHOLD} ppm</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>All MQ6 readings below 300 ppm</div>
         </div>
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
@@ -957,7 +1193,7 @@ function AlertsTab({ nonSafeAlerts, setAlerts }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// ANALYTICS TAB (unchanged)
+// ANALYTICS TAB
 // ══════════════════════════════════════════════════════════════════════════
 function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, weeklyUsage, weeklyLeaksBySev, weeklyPpm, gasLevel, cylinderPreset, levelHistory, rawWeightG }) {
   const lCol = levelColor(gasLevel)
@@ -981,22 +1217,18 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
       </div>
       <Card>
         <SectionTitle>Weekly Gas Usage (avg %)</SectionTitle>
-        <BarChart data={weeklyUsage} color="#4d8eff" />
+        <BarChart data={weeklyUsage} color="#4d8eff" showValues={true} />
         <div style={{ marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)' }}>
           {cylinderPreset.label} cylinder · ~{estDays} days remaining
         </div>
       </Card>
       <Card>
         <SectionTitle>Weekly Leak Events · MQ6</SectionTitle>
-        <DualBarChart data={weeklyLeaksBySev} />
-        <div style={{ display: 'flex', gap: 16, marginTop: 10 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#ff4560' }}>■ High: {highLeaks7d}</span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#ffb020' }}>■ Low: {lowLeaks7d}</span>
-        </div>
+        <DualBarChart data={weeklyLeaksBySev} showValues={true} />
       </Card>
       <Card>
-        <SectionTitle>Weekly Average PPM (≥{LPG_PPM_THRESHOLD} ppm only)</SectionTitle>
-        <BarChart data={weeklyPpm} color="#ffb020" />
+        <SectionTitle>Weekly Average PPM (≥300 ppm only)</SectionTitle>
+        <BarChart data={weeklyPpm} color="#ffb020" showValues={true} />
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', flexWrap: 'wrap', gap: 8 }}>
           <span>7d avg: {avgPpm7d != null ? `${avgPpm7d} ppm` : '0 ppm'}</span>
           <span style={{ color: maxPpm7d > 500 ? '#ff4560' : maxPpm7d > 300 ? '#ffb020' : 'var(--text-3)' }}>
