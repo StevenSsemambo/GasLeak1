@@ -13,23 +13,35 @@ export const CYLINDER_PRESETS = [
 ]
 const DEFAULT_CYLINDER = '6kg'
 
-// ─── weightToPercent — handles BOTH total weight and net-gas-only weight ──
-// customTare_g: if set (from manual calibration), uses that instead of preset tare
+// ─── weightToPercent ───────────────────────────────────────────────────────
+// ESP32 firmware (v2.2+) always sends: cylinder_body_weight + gas_weight
+// (board weight is already subtracted in firmware via BOARD_WEIGHT_G).
+// So we always subtract the cylinder tare to isolate gas remaining.
+// customTare_g: optional override set via Device tab calibration.
+//   Use this when your physical cylinder's tare differs from the preset.
 const weightToPercent = (weight_g, preset, customTare_g = null) => {
   if (weight_g == null || !preset) return 0
   const w = parseFloat(weight_g)
   if (isNaN(w)) return 0
 
+  // Use custom tare if calibrated, otherwise fall back to preset tare
   const tare = customTare_g != null ? parseFloat(customTare_g) : preset.tare_g
 
-  // If weight is less than or equal to net_g, the ESP32 is probably sending
-  // net gas weight only (already subtracted tare). Use it directly.
-  const looksLikeNetOnly = (customTare_g == null) && (w <= preset.net_g * 1.05)
-
-  const gasRemaining = looksLikeNetOnly ? w : (w - tare)
+  // gas remaining = total sensor reading minus the empty cylinder body weight
+  const gasRemaining = w - tare
   const raw     = (gasRemaining / preset.net_g) * 100
   const clamped = Math.min(100, Math.max(0, raw))
   return isNaN(clamped) ? 0 : parseFloat(clamped.toFixed(2))
+}
+
+// ─── gasRemainingKg — how many kg of gas are left ─────────────────────────
+const gasRemainingKg = (weight_g, preset, customTare_g = null) => {
+  if (weight_g == null || !preset) return 0
+  const w = parseFloat(weight_g)
+  if (isNaN(w)) return 0
+  const tare = customTare_g != null ? parseFloat(customTare_g) : preset.tare_g
+  const remaining = Math.max(0, w - tare)
+  return Math.min(remaining / 1000, preset.net_g / 1000)
 }
 
 // ─── MQ6 thresholds ────────────────────────────────────────────────────────
@@ -567,8 +579,8 @@ export default function App() {
   const [cylinderId, setCylinderIdRaw]           = useState(() => localStorage.getItem('gaswatch_cylinder') || DEFAULT_CYLINDER)
   const cylinderPreset                           = CYLINDER_PRESETS.find(p => p.id === cylinderId) || CYLINDER_PRESETS[1]
 
-  // customTare_g: weight of your EMPTY cylinder (set via calibration in Device tab)
-  // When null, the app auto-detects whether ESP32 sends total or net-only weight
+  // customTare_g: weight of your EMPTY cylinder body (set via Device tab calibration).
+  // When null, the app uses the preset tare for the selected cylinder size.
   const [customTare_g, setCustomTare_g]          = useState(() => {
     const v = localStorage.getItem('gaswatch_custom_tare')
     return v != null ? parseFloat(v) : null
@@ -976,6 +988,7 @@ export default function App() {
           <div style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
             <DashboardTab
               gasLevel={gasLevel} lCol={lCol} rawWeightG={rawWeightG} cylinderPreset={cylinderPreset}
+              customTare_g={customTare_g}
               levelHistory={levelHistory} severity={severity} displaySev={displaySev}
               displayPpm={displayPpm} currentPpm={currentPpm} sCol={sCol} ppmHistory={ppmHistory}
               cookingMode={cookingMode} estDays={estDays} totalLeaks={totalLeaks} rules={rules}
@@ -1052,7 +1065,8 @@ export default function App() {
 // ══════════════════════════════════════════════════════════════════════════
 // DASHBOARD TAB
 // ══════════════════════════════════════════════════════════════════════════
-function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory, severity, displaySev, displayPpm, currentPpm, sCol, ppmHistory, cookingMode, estDays, totalLeaks, rules }) {
+function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, customTare_g, levelHistory, severity, displaySev, displayPpm, currentPpm, sCol, ppmHistory, cookingMode, estDays, totalLeaks, rules }) {
+  const gasKg = rawWeightG != null ? gasRemainingKg(rawWeightG, cylinderPreset, customTare_g) : 0
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: '100%', overflowX: 'hidden', minWidth: 0 }}>
 
@@ -1067,7 +1081,7 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, levelHistory
             />
             {rawWeightG != null && (
               <div style={{ marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)', letterSpacing: '0.06em' }}>
-                {(rawWeightG / 1000).toFixed(2)} kg · {cylinderPreset.label}
+                ~{gasKg.toFixed(2)} kg gas left · {cylinderPreset.label} cylinder
               </div>
             )}
           </div>
@@ -1242,7 +1256,7 @@ function AnalyticsTab({ estDays, avgPpm7d, maxPpm7d, highLeaks7d, lowLeaks7d, we
           <div style={{ height: 80 }}><Sparkline data={levelHistory} color={lCol.main} height={80} /></div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', flexWrap: 'wrap', gap: 8 }}>
             <span>oldest</span>
-            <span>now: {Math.round(gasLevel)}%{rawWeightG != null ? ` (${(rawWeightG / 1000).toFixed(2)} kg)` : ''}</span>
+            <span>now: {Math.round(gasLevel)}%{rawWeightG != null ? ` (~${gasRemainingKg(rawWeightG, cylinderPreset, null).toFixed(2)} kg gas)` : ''}</span>
           </div>
         </Card>
       )}
@@ -1262,17 +1276,14 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
   )
   const [tareMsg, setTareMsg] = useState(null) // { text, ok }
 
-  // What mode is the app currently using?
+  // What tare source is active?
   const usingCustomTare = customTare_g != null
-  const usingAutoNet    = !usingCustomTare && rawWeightG != null && rawWeightG <= cylinderPreset.net_g * 1.05
-  const usingPresetTare = !usingCustomTare && !usingAutoNet
+  const activeTare      = usingCustomTare ? customTare_g : cylinderPreset.tare_g
 
   const modeLabel = usingCustomTare
-    ? `Custom tare: ${(customTare_g / 1000).toFixed(2)} kg`
-    : usingAutoNet
-      ? 'Auto-detected: net gas weight mode'
-      : `Preset tare: ${(cylinderPreset.tare_g / 1000).toFixed(0)} kg`
-  const modeColor = usingCustomTare ? '#00e5a0' : usingAutoNet ? '#4d8eff' : '#ffb020'
+    ? `Custom tare: ${(customTare_g / 1000).toFixed(2)} kg (your calibration)`
+    : `Preset tare: ${(cylinderPreset.tare_g / 1000).toFixed(0)} kg (${cylinderPreset.label} standard)`
+  const modeColor = usingCustomTare ? '#00e5a0' : '#ffb020'
 
   const handleSaveTare = () => {
     const kg = parseFloat(tareInput)
@@ -1288,7 +1299,7 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
   const handleClearTare = () => {
     setCustomTare(null)
     setTareInput('')
-    setTareMsg({ text: 'Custom tare cleared — using auto-detection', ok: true })
+    setTareMsg({ text: 'Custom tare cleared — using preset tare for selected cylinder', ok: true })
     setTimeout(() => setTareMsg(null), 3000)
   }
 
@@ -1344,24 +1355,39 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
           <div style={{
             padding: '10px 14px', borderRadius: 'var(--r-sm)', marginBottom: 16,
             background: 'var(--surface3)', border: '1px solid var(--border)',
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+            display: 'flex', flexDirection: 'column', gap: 8,
           }}>
-            <span style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-3)' }}>
-              Live reading from ESP32
-            </span>
-            <span style={{ fontFamily: 'var(--font-disp)', fontSize: 18, fontWeight: 800, color: 'var(--text-1)' }}>
-              {(rawWeightG / 1000).toFixed(3)} kg
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', marginLeft: 6, fontWeight: 400 }}>
-                ({rawWeightG.toFixed(0)} g)
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+              <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-3)' }}>
+                Sensor reading (cylinder body + gas, board subtracted by firmware)
               </span>
-            </span>
+              <span style={{ fontFamily: 'var(--font-disp)', fontSize: 16, fontWeight: 800, color: 'var(--text-1)' }}>
+                {(rawWeightG / 1000).toFixed(3)} kg
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', marginLeft: 6, fontWeight: 400 }}>
+                  ({rawWeightG.toFixed(0)} g)
+                </span>
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+              <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-3)' }}>
+                Gas remaining (sensor − tare {(activeTare / 1000).toFixed(1)} kg)
+              </span>
+              <span style={{ fontFamily: 'var(--font-disp)', fontSize: 16, fontWeight: 800, color: '#00e5a0' }}>
+                ~{gasRemainingKg(rawWeightG, cylinderPreset, customTare_g).toFixed(2)} kg
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', marginLeft: 6, fontWeight: 400 }}>
+                  ({Math.round(gasLevel)}%)
+                </span>
+              </span>
+            </div>
           </div>
         )}
 
         {/* Explanation */}
         <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-2)', lineHeight: 1.65, marginBottom: 16 }}>
-          If the percentage reads <strong style={{ color: 'var(--text-1)' }}>0% / always red</strong>, your ESP32 is sending the
-          weight differently than expected. Use one of the options below to fix it.
+          The ESP32 firmware subtracts the wooden board weight automatically, so it always sends
+          <strong style={{ color: 'var(--text-1)' }}> cylinder body + gas weight</strong> to the app.
+          The app then subtracts the cylinder tare below to calculate gas remaining.
+          If your percentage looks wrong, calibrate the tare to match your actual empty cylinder weight.
         </div>
 
         {/* Option A: stamp tare from live reading */}
@@ -1374,14 +1400,15 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
               Option A — Empty cylinder on scale right now?
             </div>
             <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5, marginBottom: 10 }}>
-              Place your <strong style={{ color: 'var(--text-2)' }}>empty cylinder</strong> on the scale, wait for a stable reading, then tap below to stamp the current reading as the tare weight.
+              Place your <strong style={{ color: 'var(--text-2)' }}>completely empty cylinder</strong> on the scale (no gas inside).
+              Wait for the reading to stabilise, then tap below. The current sensor reading will be saved as your tare weight.
             </div>
             <button onClick={handleStampTare} style={{
               padding: '8px 16px', borderRadius: 8, fontSize: 12, fontWeight: 700,
               background: 'rgba(0,229,160,0.15)', border: '1px solid rgba(0,229,160,0.4)',
               color: '#00e5a0', letterSpacing: '0.03em',
             }}>
-              📍 Stamp {rawWeightG != null ? `${(rawWeightG / 1000).toFixed(3)} kg` : '—'} as Empty Tare
+              📍 Stamp {rawWeightG != null ? `${(rawWeightG / 1000).toFixed(3)} kg` : '—'} as empty cylinder tare
             </button>
           </div>
         )}
@@ -1444,11 +1471,13 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
 
         {/* Formula display */}
         <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 'var(--r-sm)', background: 'var(--surface3)', border: '1px solid var(--border)', fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', lineHeight: 1.8 }}>
-          {usingAutoNet
-            ? <>Formula: <span style={{ color: 'var(--text-2)' }}>weight_g ÷ {cylinderPreset.net_g} × 100</span> <span style={{ color: '#4d8eff' }}>(net-only mode)</span></>
-            : <>Formula: <span style={{ color: 'var(--text-2)' }}>(weight_g − {usingCustomTare ? customTare_g : cylinderPreset.tare_g}g) ÷ {cylinderPreset.net_g} × 100</span></>
-          }
+          Formula: <span style={{ color: 'var(--text-2)' }}>(sensor_g − {activeTare}g tare) ÷ {cylinderPreset.net_g}g × 100</span>
           {' '}· Clamped 0–100%
+          <br />
+          <span style={{ color: 'var(--text-3)' }}>
+            Example full: ({cylinderPreset.tare_g + cylinderPreset.net_g}g − {activeTare}g) ÷ {cylinderPreset.net_g}g = 100%
+            · Empty: ({cylinderPreset.tare_g}g − {activeTare}g) ÷ {cylinderPreset.net_g}g = {Math.round(((cylinderPreset.tare_g - activeTare) / cylinderPreset.net_g) * 100)}%
+          </span>
         </div>
       </Card>
 
@@ -1515,7 +1544,7 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen, d
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {[
             { icon: '🔗', title: 'ESP32 WiFi',      desc: 'Set WIFI_SSID + WIFI_PASSWORD in firmware.' },
-            { icon: '⚖️', title: 'HX711 Load Cell', desc: 'Posts weight_grams every 5 s. Use the calibration card above if the % is stuck at 0.' },
+            { icon: '⚖️', title: 'HX711 Load Cell', desc: 'Firmware subtracts board weight (BOARD_WEIGHT_G) automatically. Posts cylinder_body + gas weight every 5 s. App then subtracts cylinder tare to get gas remaining.' },
             { icon: '📊', title: 'MQ6 Table',        desc: 'Posts severity, raw_value, ppm_approx. Readings below 300 ppm are suppressed.' },
             { icon: '📡', title: 'Realtime',          desc: 'Enable Realtime on both tables in Supabase → Database → Replication.' },
           ].map((c, i) => (
