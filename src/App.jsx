@@ -13,10 +13,15 @@ export const CYLINDER_PRESETS = [
 ]
 const DEFAULT_CYLINDER = '6kg'
 
-// MQ6 safety thresholds — NIOSH/LEL based for East Africa LPG (propane+butane)
-// 200 ppm = sensor floor / early accumulation  |  1000 ppm ≈ 5% LEL = ignition risk
-const LPG_PPM_LOW  = 200
-const LPG_PPM_HIGH = 1000
+// ── MQ6 safety thresholds ─────────────────────────────────────────────────
+// These MUST match PPM_SAFE_LIMIT and PPM_LOW_LIMIT in the ESP32 firmware.
+// ESP32 firmware: severity = "safe" below 200, "low" below 1000, "high" at/above 1000
+const LPG_PPM_LOW  = 200   // matches PPM_SAFE_LIMIT in firmware
+const LPG_PPM_HIGH = 1000  // matches PPM_LOW_LIMIT  in firmware
+
+// ── Supabase table names — must match #define in firmware ─────────────────
+// gasTable    = "gas_leakages"   → columns: id, severity, raw_value, ppm_approx, created_at
+// weightTable = "gas_levels"     → columns: id, weight_grams, created_at
 
 const weightToPercent = (weight_g, preset, customTare_g = null) => {
   if (weight_g == null || !preset) return 0
@@ -35,12 +40,18 @@ const gasRemainingKg = (weight_g, preset, customTare_g = null) => {
   return Math.min(Math.max(0, w - tare) / 1000, preset.net_g / 1000)
 }
 
-// Always derive severity from ppm — never trust the ESP32 severity field alone
+// Always derive severity from ppm — never trust the ESP32 severity field alone.
+// This mirrors the firmware logic exactly:
+//   ppm < LPG_PPM_LOW  → "safe"
+//   ppm < LPG_PPM_HIGH → "low"
+//   ppm >= LPG_PPM_HIGH → "high"
 const deriveSeverity = (ppm) => {
   if (ppm == null || ppm < LPG_PPM_LOW) return 'safe'
   if (ppm >= LPG_PPM_HIGH) return 'high'
   return 'low'
 }
+
+// Only surface ppm values that are at or above the warning floor
 const filterPpm = (ppm) => (ppm != null && ppm >= LPG_PPM_LOW ? Number(ppm) : null)
 
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
@@ -56,13 +67,11 @@ const estimateDays = (gasLevel, levelHistory) => {
     const drops  = recent.slice(1).map((v, i) => recent[i] - v).filter(d => d > 0)
     if (drops.length >= 3) {
       const avgDropPerReading = drops.reduce((a, b) => a + b, 0) / drops.length
-      // readings are every 5s in live mode → 17280 readings/day; demo is 3.5s intervals
-      const readingsPerDay = 17280
-      const daysLeft = gasLevel / (avgDropPerReading * readingsPerDay)
+      const readingsPerDay    = 17280  // one reading every 5 s
+      const daysLeft          = gasLevel / (avgDropPerReading * readingsPerDay)
       if (daysLeft > 0 && daysLeft < 365) return Math.ceil(daysLeft)
     }
   }
-  // fallback: 2.1% per day based on typical 6kg cylinder household usage
   return Math.max(0, Math.ceil(gasLevel / 2.1))
 }
 
@@ -113,7 +122,6 @@ const levelColor = l => l < 20 ? C.high : l < 40 ? C.low : C.safe
 
 // ── Demo data ─────────────────────────────────────────────────────────────
 let demoTick = 0
-// Realistic cycle: normal → low leak → clear → critical → clear
 const DEMO_CYCLE_SEVS = ['safe','safe','safe','safe','low','low','safe','safe','high','safe','safe','safe']
 const DEMO_CYCLE_PPM  = [  48,   55,   51,   62,  280,  320,   58,   50,  1200,   53,   47,   55 ]
 const genDemoWeight = prev => Math.max(8050, Math.min(14000, (prev ?? 11400) + (Math.random() - 0.52) * 28))
@@ -201,16 +209,15 @@ function ArcGauge({ value, color, size = 160 }) {
   )
 }
 
-// ── PPM Bar (segmented zones: safe / low / high) ────────────────────────
+// ── PPM Bar (segmented zones: safe / low / high) ──────────────────────────
 function PpmBar({ ppm }) {
   const MAX      = 2000
   const fPpm     = filterPpm(ppm)
   const pct      = Math.min(100, ((fPpm || 0) / MAX) * 100)
   const severity = deriveSeverity(fPpm)
   const col      = severity === 'high' ? C.high.main : severity === 'low' ? C.low.main : C.safe.main
-  // Zone marker positions as % of bar width
-  const lowPct  = (LPG_PPM_LOW  / MAX) * 100   // 10%
-  const highPct = (LPG_PPM_HIGH / MAX) * 100   // 50%
+  const lowPct   = (LPG_PPM_LOW  / MAX) * 100   // 10%
+  const highPct  = (LPG_PPM_HIGH / MAX) * 100   // 50%
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6,
@@ -220,19 +227,15 @@ function PpmBar({ ppm }) {
           {fPpm != null ? `~${Math.round(fPpm)} ppm` : '< 200 ppm (safe)'}
         </span>
       </div>
-      {/* Bar with zone gradient */}
       <div style={{ position: 'relative', background: 'var(--surface3)', borderRadius: 6, height: 10, overflow: 'hidden' }}>
-        {/* Zone background colours */}
         <div style={{ position: 'absolute', inset: 0, background:
           `linear-gradient(90deg, rgba(0,229,160,0.18) 0%, rgba(0,229,160,0.18) ${lowPct}%,
            rgba(255,176,32,0.18) ${lowPct}%, rgba(255,176,32,0.18) ${highPct}%,
            rgba(255,69,96,0.18) ${highPct}%, rgba(255,69,96,0.18) 100%)` }} />
-        {/* Active fill */}
         <div style={{ position: 'relative', width: `${pct}%`, height: '100%', borderRadius: 6,
           background: `linear-gradient(90deg, #00e5a0, ${col})`,
           transition: 'width 1s ease, background 0.4s ease',
           boxShadow: fPpm ? `0 0 8px ${col}60` : 'none' }} />
-        {/* Zone markers */}
         {[lowPct, highPct].map((pos, i) => (
           <div key={i} style={{ position: 'absolute', top: 0, bottom: 0, left: `${pos}%`,
             width: 1, background: 'rgba(255,255,255,0.25)' }} />
@@ -272,7 +275,6 @@ function Sparkline({ data, color, height = 40 }) {
       <path d={area} fill={`url(#${gradId})`} />
       <polyline points={line} fill="none" stroke={color} strokeWidth="1.8"
         strokeLinejoin="round" strokeLinecap="round" />
-      {/* Highlight last point */}
       <circle cx={pts[pts.length - 1][0]} cy={pts[pts.length - 1][1]} r="3"
         fill={color} style={{ filter: `drop-shadow(0 0 4px ${color})` }} />
     </svg>
@@ -285,10 +287,10 @@ function BarChart({ data, color, showValues = true }) {
     <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center',
         color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>No data yet</div>
   )
-  const max          = Math.max(...data.map(d => d.value), 1)
-  const barAreaH     = 100
-  const yAxisW       = 38
-  const yTicks       = [0, Math.round(max * 0.5), max]
+  const max      = Math.max(...data.map(d => d.value), 1)
+  const barAreaH = 100
+  const yAxisW   = 38
+  const yTicks   = [0, Math.round(max * 0.5), max]
   return (
     <div style={{ width: '100%' }}>
       <div style={{ display: 'flex', gap: 6 }}>
@@ -363,7 +365,6 @@ function DualBarChart({ data, showValues = true }) {
                     alignItems: 'center', height: '100%', justifyContent: 'flex-end', minWidth: 0 }}>
                   <div style={{ width: '100%', display: 'flex', gap: 2,
                       alignItems: 'flex-end', height: groupH }}>
-                    {/* High (red) */}
                     <div style={{ flex: 1, borderRadius: '2px 2px 0 0', position: 'relative',
                         height: `${highBarH}%`, minHeight: d.high > 0 ? 3 : 0,
                         background: '#ff4560', opacity: d.high > 0 ? 1 : 0.1,
@@ -376,7 +377,6 @@ function DualBarChart({ data, showValues = true }) {
                             pointerEvents: 'none' }}>{d.high}</div>
                       )}
                     </div>
-                    {/* Low (amber) */}
                     <div style={{ flex: 1, borderRadius: '2px 2px 0 0', position: 'relative',
                         height: `${lowBarH}%`, minHeight: d.low > 0 ? 3 : 0,
                         background: '#ffb020', opacity: d.low > 0 ? 1 : 0.1,
@@ -487,9 +487,8 @@ function CookingModeToggle({ active, onToggle, cookingStart }) {
 function LeakAlertPopup({ severity, ppm, gasLevel, onDismiss }) {
   const isHigh = severity === 'high'
   const col    = isHigh ? C.high : C.low
-  const rules  = getRecommendations(severity, 100, ppm) // pass 100 so gas-level rules don't override
+  const rules  = getRecommendations(severity, 100, ppm)
 
-  // Trap focus inside modal and close on Escape
   const modalRef = useRef(null)
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onDismiss() }
@@ -523,7 +522,6 @@ function LeakAlertPopup({ severity, ppm, gasLevel, onDismiss }) {
         outline: 'none',
         maxHeight: '90vh', overflowY: 'auto',
       }}>
-        {/* ── Header ── */}
         <div style={{
           padding: '18px 20px',
           background: isHigh
@@ -549,7 +547,6 @@ function LeakAlertPopup({ severity, ppm, gasLevel, onDismiss }) {
               {isHigh ? ' · ≥1000 ppm DANGER ZONE' : ' · 200–999 ppm early warning'}
             </div>
           </div>
-          {/* PPM badge */}
           <div style={{ textAlign: 'center', flexShrink: 0 }}>
             <div style={{ fontFamily: 'var(--font-disp)', fontSize: 22, fontWeight: 800,
                 color: col.main, lineHeight: 1 }}>
@@ -560,7 +557,6 @@ function LeakAlertPopup({ severity, ppm, gasLevel, onDismiss }) {
           </div>
         </div>
 
-        {/* ── Action list ── */}
         <div style={{ padding: '14px 16px 10px', display: 'flex', flexDirection: 'column', gap: 7 }}>
           {rules.map((r, i) => (
             <div key={i} style={{
@@ -578,7 +574,6 @@ function LeakAlertPopup({ severity, ppm, gasLevel, onDismiss }) {
           ))}
         </div>
 
-        {/* ── Dismiss ── */}
         <div style={{ padding: '6px 16px 18px' }}>
           <button onClick={onDismiss} style={{
             width: '100%', padding: '12px', borderRadius: 10, cursor: 'pointer',
@@ -651,7 +646,6 @@ export default function App() {
     [rawWeightG, cylinderPreset, customTare_g]
   )
 
-  // Update history when weight/preset/tare changes
   useEffect(() => {
     if (rawWeightG == null) return
     const pct = weightToPercent(rawWeightG, cylinderPreset, customTare_g)
@@ -662,7 +656,7 @@ export default function App() {
   const [alarmBanner,  setAlarmBanner]  = useState(false)
   const [alerts,       setAlerts]       = useState([])
   const [totalLeaks,   setTotalLeaks]   = useState(0)
-  const [leakPopup,    setLeakPopup]    = useState(null) // { severity, ppm }
+  const [leakPopup,    setLeakPopup]    = useState(null)
   const lastPopupSev   = useRef('safe')
 
   // ── Cooking mode ──────────────────────────────────────────────────────
@@ -680,13 +674,11 @@ export default function App() {
       setCookingStart(null)
       setAlarmBanner(false)
       clearInterval(alarmTimer.current)
-      // Reset popup state so next real leak fires popup again
       lastPopupSev.current = 'safe'
       setLeakPopup(null)
     }
   }, [])
 
-  // Auto-off cooking mode after 2 hours
   useEffect(() => {
     if (!cookingMode || !cookingStart) return
     const remaining = 2 * 60 * 60 * 1000 - (Date.now() - cookingStart)
@@ -712,7 +704,6 @@ export default function App() {
     try {
       if (!audioCtx.current) audioCtx.current = new AudioContext()
       const ctx = audioCtx.current
-      // Two-tone urgent pattern
       [[880,0],[660,0.2],[880,0.4],[660,0.6]].forEach(([freq, t]) => {
         const osc = ctx.createOscillator(), gain = ctx.createGain()
         osc.connect(gain); gain.connect(ctx.destination)
@@ -730,7 +721,6 @@ export default function App() {
   }, [])
 
   // ── Leak popup trigger ────────────────────────────────────────────────
-  // Only fires when severity *changes* (safe→low, safe→high, low→high)
   const triggerLeakPopup = useCallback((fSev, fPpm) => {
     if (cookingRef.current) return
     if (fSev === 'safe') {
@@ -745,9 +735,10 @@ export default function App() {
   }, [])
 
   // ── Main leak event handler ───────────────────────────────────────────
+  // Reads ppm_approx from Supabase row (matches firmware field name)
   const handleLeakEvent = useCallback((sev, id, ts, rawPpm, rawAdc) => {
     const fPpm = filterPpm(rawPpm)
-    const fSev = deriveSeverity(rawPpm)   // always re-derive from ppm, ignore ESP32 sev field
+    const fSev = deriveSeverity(rawPpm)  // always re-derive — don't trust firmware severity field
 
     setSeverity(fSev)
     setLastSeen(new Date(ts || Date.now()))
@@ -793,7 +784,6 @@ export default function App() {
   // ── Data init + realtime subscriptions ───────────────────────────────
   useEffect(() => {
     if (demoMode) {
-      // Seed initial demo state
       setTimeout(() => setLoaded(true), 280)
       const DL = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
       setWeeklyLeaksBySev(DL.map((l, i) => ({ label: l, high: [0,1,0,0,1,0,0][i], low: [0,2,1,0,2,1,0][i] })))
@@ -813,7 +803,6 @@ export default function App() {
       setTotalLeaks(7); setConnected(false)
 
       const iv = setInterval(() => {
-        // Tick weight
         setRawWeightG(prev => {
           const nw = genDemoWeight(prev)
           const pr = cylinderPresetRef.current
@@ -821,7 +810,6 @@ export default function App() {
           setLevelHistory(h => [...h.slice(-59), weightToPercent(nw, pr, ct)])
           return nw
         })
-        // Tick leak sensor
         const idx    = demoTick++ % DEMO_CYCLE_SEVS.length
         const rawPpm = DEMO_CYCLE_PPM[idx]
         const fPpm   = filterPpm(rawPpm)
@@ -855,15 +843,20 @@ export default function App() {
     }
 
     // ── Live mode ──
+    // All Supabase queries use exact column names from the firmware:
+    //   gas_levels:    weight_grams, created_at
+    //   gas_leakages:  id, severity, raw_value, ppm_approx, created_at
     let levelCh, leakCh
 
     async function init() {
       // Load recent gas levels
-      const { data: lvls } = await supabase
+      const { data: lvls, error: lvlErr } = await supabase
         .from('gas_levels')
         .select('weight_grams,created_at')
         .order('created_at', { ascending: false })
         .limit(60)
+
+      if (lvlErr) console.error('[GasWatch] gas_levels fetch error:', lvlErr.message)
 
       if (lvls?.length > 0) {
         const pr = cylinderPresetRef.current
@@ -874,15 +867,17 @@ export default function App() {
         setLevelHistory(lvls.map(r => weightToPercent(Number(r.weight_grams), pr, ct)).reverse())
       }
 
-      // Load recent leakage events
-      const { data: leaks } = await supabase
+      // Load recent leakage events — field: ppm_approx (matches firmware doc["ppm_approx"])
+      const { data: leaks, error: leakErr } = await supabase
         .from('gas_leakages')
         .select('id,severity,raw_value,ppm_approx,created_at')
         .order('created_at', { ascending: false })
         .limit(100)
 
+      if (leakErr) console.error('[GasWatch] gas_leakages fetch error:', leakErr.message)
+
       if (leaks?.length > 0) {
-        const l   = leaks[0]
+        const l    = leaks[0]
         const fSev = deriveSeverity(l.ppm_approx)
         const fPpm = filterPpm(l.ppm_approx)
         setSeverity(fSev)
@@ -953,14 +948,27 @@ export default function App() {
           setConnected(true)
           setLevelHistory(prev => [...prev.slice(-59), weightToPercent(w, pr, ct)])
         })
-        .subscribe()
+        .subscribe(status => {
+          if (status === 'SUBSCRIBED') console.log('[GasWatch] Realtime: gas_levels subscribed')
+          if (status === 'CHANNEL_ERROR') console.error('[GasWatch] Realtime: gas_levels channel error — check Supabase Realtime is enabled')
+        })
 
+      // Realtime for gas_leakages — reads ppm_approx and raw_value (firmware field names)
       leakCh = supabase.channel('rt-leakages')
         .on('postgres_changes', { event:'INSERT', schema:'public', table:'gas_leakages' }, p => {
-          handleLeakEvent(p.new.severity, p.new.id, p.new.created_at, p.new.ppm_approx, p.new.raw_value)
+          handleLeakEvent(
+            p.new.severity,   // text: "safe" | "low" | "high"
+            p.new.id,
+            p.new.created_at,
+            p.new.ppm_approx, // int: calculated LPG ppm
+            p.new.raw_value   // int: ADC reading 0-4095
+          )
           setConnected(true)
         })
-        .subscribe()
+        .subscribe(status => {
+          if (status === 'SUBSCRIBED') console.log('[GasWatch] Realtime: gas_leakages subscribed')
+          if (status === 'CHANNEL_ERROR') console.error('[GasWatch] Realtime: gas_leakages channel error — check Supabase Realtime is enabled')
+        })
     }
 
     return () => {
@@ -1000,7 +1008,6 @@ export default function App() {
     <div style={{ minHeight:'100vh', background:'var(--bg)', display:'flex',
         flexDirection:'column', width:'100%', maxWidth:'100%', overflowX:'hidden' }}>
 
-      {/* ── LEAK POPUP ─────────────────────────────────────────── */}
       {leakPopup && !cookingMode && (
         <LeakAlertPopup
           severity={leakPopup.severity}
@@ -1258,7 +1265,6 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, customTare_g
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
 
-      {/* Gauge + Leak Status row */}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
         <Card accent={lCol.main} glow={lCol.glow}
           style={{ display:'flex', flexDirection:'column', alignItems:'center', padding:'20px 12px' }}>
@@ -1307,7 +1313,6 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, customTare_g
         </Card>
       </div>
 
-      {/* PPM bar */}
       <Card>
         <SectionTitle>MQ6 Gas Concentration</SectionTitle>
         <PpmBar ppm={displayPpm} />
@@ -1322,7 +1327,6 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, customTare_g
         )}
       </Card>
 
-      {/* Stats row */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
         {[
           { label:'Est. Days Left', val:`~${estDays}d`,             col:'#4d8eff'  },
@@ -1338,7 +1342,6 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, customTare_g
         ))}
       </div>
 
-      {/* Level trend sparkline */}
       {levelHistory.length >= 3 && (
         <Card>
           <SectionTitle>Cylinder Level Trend · Last {Math.min(levelHistory.length,60)} Readings</SectionTitle>
@@ -1351,7 +1354,6 @@ function DashboardTab({ gasLevel, lCol, rawWeightG, cylinderPreset, customTare_g
         </Card>
       )}
 
-      {/* Safety recommendations */}
       <Card accent={sCol.main}>
         <SectionTitle>
           {displaySev === 'high' ? '🚨 URGENT — Safety Actions' :
@@ -1576,16 +1578,13 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen,
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
 
-      {/* Cylinder size */}
       <Card>
         <CylinderSelector selectedId={cylinderId} onChange={setCylinderId} />
       </Card>
 
-      {/* Load cell calibration */}
       <Card accent="#4d8eff">
         <SectionTitle>⚖️ Load Cell Calibration</SectionTitle>
 
-        {/* Active mode banner */}
         <div style={{ padding:'10px 14px', borderRadius:'var(--r-sm)', marginBottom:16,
             background:'var(--surface2)', border:`1px solid ${modeColor}44`,
             display:'flex', alignItems:'center', gap:10 }}>
@@ -1605,7 +1604,6 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen,
           </div>
         </div>
 
-        {/* Live weight readout */}
         {rawWeightG != null && (
           <div style={{ padding:'10px 14px', borderRadius:'var(--r-sm)', marginBottom:16,
               background:'var(--surface3)', border:'1px solid var(--border)',
@@ -1613,7 +1611,7 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen,
             <div style={{ display:'flex', justifyContent:'space-between',
                 alignItems:'center', flexWrap:'wrap', gap:8 }}>
               <span style={{ fontFamily:'var(--font-body)', fontSize:12, color:'var(--text-3)' }}>
-                Sensor (cylinder + gas — board tare subtracted by firmware)
+                Sensor reading (board tare subtracted by firmware)
               </span>
               <span style={{ fontFamily:'var(--font-disp)', fontSize:16, fontWeight:800, color:'var(--text-1)' }}>
                 {(rawWeightG/1000).toFixed(3)} kg
@@ -1643,11 +1641,11 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen,
         <div style={{ fontFamily:'var(--font-body)', fontSize:13, color:'var(--text-2)',
             lineHeight:1.65, marginBottom:16 }}>
           The ESP32 firmware subtracts the wooden board weight automatically and always posts
-          <strong style={{ color:'var(--text-1)' }}> cylinder body + gas weight</strong>.
+          <strong style={{ color:'var(--text-1)' }}> cylinder body + gas weight</strong> as
+          <code style={{ fontFamily:'var(--font-mono)', fontSize:12 }}> weight_grams</code>.
           Set the tare below so the app can calculate actual gas remaining correctly.
         </div>
 
-        {/* Option A */}
         {rawWeightG != null && (
           <div style={{ padding:'12px 14px', borderRadius:'var(--r-sm)', marginBottom:12,
               background:'rgba(0,229,160,0.06)', border:'1px solid rgba(0,229,160,0.2)' }}>
@@ -1668,7 +1666,6 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen,
           </div>
         )}
 
-        {/* Option B */}
         <div style={{ padding:'12px 14px', borderRadius:'var(--r-sm)', marginBottom:12,
             background:'rgba(77,142,255,0.06)', border:'1px solid rgba(77,142,255,0.2)' }}>
           <div style={{ fontFamily:'var(--font-body)', fontSize:13, fontWeight:600,
@@ -1726,14 +1723,14 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen,
         </div>
       </Card>
 
-      {/* MQ6 threshold reference */}
+      {/* MQ6 threshold reference — values match firmware constants */}
       <Card accent="#ffb020">
         <SectionTitle>🔬 MQ6 Safety Thresholds (NIOSH/LEL)</SectionTitle>
         {[
-          { range:'0 – 199 ppm',     label:'Safe',          col:'#00e5a0', desc:'Below sensor detection floor — normal air' },
-          { range:'200 – 999 ppm',   label:'Warning ⚠️',    col:'#ffb020', desc:'Early accumulation — ventilate immediately, check valve' },
-          { range:'1000 – 1999 ppm', label:'Critical 🚨',   col:'#ff4560', desc:'~5% LEL — ignition risk present, evacuate' },
-          { range:'≥ 2000 ppm',      label:'IDLH / LEL',    col:'#ff4560', desc:'NIOSH emergency level — explosion possible' },
+          { range:`0 – ${LPG_PPM_LOW - 1} ppm`,        label:'Safe',          col:'#00e5a0', desc:'Below sensor detection floor — normal air' },
+          { range:`${LPG_PPM_LOW} – ${LPG_PPM_HIGH - 1} ppm`, label:'Warning ⚠️', col:'#ffb020', desc:'Early accumulation — ventilate immediately, check valve' },
+          { range:`${LPG_PPM_HIGH} – 1999 ppm`,         label:'Critical 🚨',   col:'#ff4560', desc:'~5% LEL — ignition risk present, evacuate' },
+          { range:'≥ 2000 ppm',                         label:'IDLH / LEL',    col:'#ff4560', desc:'NIOSH emergency level — explosion possible' },
         ].map((row, i, arr) => (
           <div key={i} style={{ display:'flex', justifyContent:'space-between',
               alignItems:'flex-start', padding:'10px 0',
@@ -1753,21 +1750,20 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen,
         <div style={{ marginTop:12, padding:'10px 14px', borderRadius:'var(--r-sm)',
             background:'rgba(255,176,32,0.06)', border:'1px solid rgba(255,176,32,0.2)',
             fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-3)', lineHeight:1.7 }}>
-          ESP32 firmware should send: severity=<span style={{ color:'#00e5a0' }}>safe</span> when ppm&lt;200 ·
-          severity=<span style={{ color:'#ffb020' }}>low</span> when 200≤ppm&lt;1000 ·
-          severity=<span style={{ color:'#ff4560' }}>high</span> when ppm≥1000
+          Firmware constants: PPM_SAFE_LIMIT=<span style={{ color:'#00e5a0' }}>{LPG_PPM_LOW}</span> ·
+          PPM_LOW_LIMIT=<span style={{ color:'#ff4560' }}>{LPG_PPM_HIGH}</span> ·
+          PPM_CHANGE_THRESHOLD=20 (dedup guard)
         </div>
       </Card>
 
-      {/* ESP32 status */}
       <Card accent="#4d8eff">
         <SectionTitle>ESP32 Device Status</SectionTitle>
         {[
           { k:'Connection', v: connected ? 'Online' : demoMode ? 'Demo Mode' : 'Offline',
             col: connected ? '#00e5a0' : demoMode ? '#ffb020' : '#ff4560' },
           { k:'Last Data',  v: lastSeen.toLocaleTimeString(),   col:null },
-          { k:'Protocol',   v: 'HTTP POST → Supabase',          col:null },
-          { k:'Send Rate',  v: 'Every 5 seconds',               col:null },
+          { k:'Protocol',   v: 'HTTP POST → Supabase REST',     col:null },
+          { k:'Send Rate',  v: 'Every 5 s (dedup on change)',   col:null },
           { k:'Firmware',   v: 'GasWatch v2.2.0',               col:'#4d8eff' },
         ].map((r, i, arr) => (
           <div key={i} style={{ display:'flex', justifyContent:'space-between',
@@ -1782,7 +1778,6 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen,
         ))}
       </Card>
 
-      {/* Live MQ6 readings */}
       <Card>
         <SectionTitle>Live MQ6 Readings</SectionTitle>
         {[
@@ -1805,7 +1800,6 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen,
         ))}
       </Card>
 
-      {/* Sensor health */}
       <Card>
         <SectionTitle>Sensor Health</SectionTitle>
         {[
@@ -1836,21 +1830,22 @@ function DeviceTab({ cylinderId, setCylinderId, connected, demoMode, lastSeen,
         ))}
       </Card>
 
-      {/* Integration notes */}
       <Card>
         <SectionTitle>Integration Notes</SectionTitle>
         <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
           {[
             { icon:'🔗', title:'ESP32 WiFi',
-              desc:'Set WIFI_SSID + WIFI_PASSWORD in firmware config.' },
+              desc:'Managed by WiFiManager — connect phone to "GasMonitor-Setup" hotspot on first boot, open 192.168.4.1.' },
             { icon:'⚖️', title:'HX711 Load Cell',
-              desc:'Firmware subtracts BOARD_WEIGHT_G automatically and posts cylinder + gas weight every 5 s.' },
+              desc:'Firmware subtracts BOARD_WEIGHT_G automatically, posts cylinder + gas weight as weight_grams every 5 s (only when changed by ≥20 g).' },
             { icon:'📊', title:'MQ6 Thresholds',
-              desc:'Update firmware: safe < 200 ppm · low 200–999 ppm · high ≥ 1000 ppm. Based on NIOSH safety standards for East Africa LPG.' },
+              desc:`Firmware: safe < ${LPG_PPM_LOW} ppm · low ${LPG_PPM_LOW}–${LPG_PPM_HIGH-1} ppm · high ≥ ${LPG_PPM_HIGH} ppm. Uploads only when severity or ppm changes by ≥20.` },
             { icon:'📍', title:'Sensor Placement',
               desc:'Mount MQ6 low (near floor level) — LPG is heavier than air and sinks. Ideal distance: 20–40 cm from regulator.' },
             { icon:'📡', title:'Supabase Realtime',
-              desc:'Enable Realtime replication for both gas_levels and gas_leakages tables in Supabase → Database → Replication.' },
+              desc:'Enable Realtime replication for both gas_levels and gas_leakages in Supabase → Database → Replication. Check browser console for "SUBSCRIBED" messages.' },
+            { icon:'🔑', title:'Environment Variables',
+              desc:'Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env (local) and in Netlify → Site Settings → Environment Variables (deployed). Missing vars = Demo Mode.' },
           ].map((c, i) => (
             <div key={i} style={{ padding:'12px', background:'var(--surface2)',
                 borderRadius:'var(--r-sm)', border:'1px solid var(--border)',
